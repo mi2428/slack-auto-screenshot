@@ -165,8 +165,8 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frames < 6 || len(out.Dates) != 30 {
-		t.Fatalf("lost coverage: %d frames, %d dates", frames, len(out.Dates))
+	if frames < 6 || len(out.Dates) != 30 || len(out.Gaps) != 0 {
+		t.Fatalf("lost coverage: %d frames, %d dates, %d gaps", frames, len(out.Dates), len(out.Gaps))
 	}
 	f, err := os.Open(filepath.Join(out.Stage, "000001.png"))
 	if err != nil {
@@ -210,6 +210,51 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	marker, err := os.ReadFile(filepath.Join(path, "COMPLETE.txt"))
 	if err != nil || !strings.Contains(string(marker), "WARNING: 1 possible screenshot gap(s)") || !strings.Contains(string(marker), bestEffort.Gaps[0]) {
 		t.Fatalf("missing gap warning in completion marker: %s %v", marker, err)
+	}
+}
+
+func TestCaptureSidebarReflowsAroundThreads(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	html := `<style>body{margin:0}.p-client_workspace__tabpanel{display:grid;grid-template-columns:200px minmax(0,1fr);width:800px}.p-view_contents--primary{grid-column:2;min-width:0}</style><div class="p-client_workspace__tabpanel"><div class="p-view_contents--sidebar">Channels</div><div class="p-view_contents--primary" data-qa="message_pane">Message</div><div id="thread">Thread</div></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(html)); err != nil {
+		t.Fatal(err)
+	}
+	pane, err := b.first(`[data-qa="message_pane"]`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.styleSheet(captureSidebarCSS); err != nil {
+		t.Fatal(err)
+	}
+	expanded, err := b.box(pane)
+	if err != nil || expanded.x1 != 0 || expanded.width() != 800 {
+		t.Fatalf("message pane did not expand: %+v %v", expanded, err)
+	}
+	thread, err := b.first("#thread", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = chromedp.Call(b.ctx, dom.SetAttributeValue, dom.SetAttributeValueParams{NodeID: thread, Name: "data-qa", Value: "threads_flexpane"}); err != nil {
+		t.Fatal(err)
+	}
+	withThread, err := b.box(pane)
+	if err != nil || withThread.x1 != 200 || withThread.width() != 600 {
+		t.Fatalf("thread pane did not restore native grid: %+v %v", withThread, err)
+	}
+	if _, err = chromedp.Call(b.ctx, dom.SetAttributeValue, dom.SetAttributeValueParams{NodeID: thread, Name: "data-qa", Value: "closed"}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := b.box(pane)
+	if err != nil || again.x1 != 0 || again.width() != 800 {
+		t.Fatalf("message pane did not expand after thread close: %+v %v", again, err)
 	}
 }
 

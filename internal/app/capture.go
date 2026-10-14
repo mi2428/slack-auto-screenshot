@@ -32,6 +32,11 @@ type frameOptions struct {
 	from, to string
 }
 
+// Keep Slack's native grid while a thread is open; its pane needs a third column.
+const captureSidebarCSS = `[data-qa="search_tip_banner"]{display:none!important}` +
+	`.p-client_workspace__tabpanel:not(:has([data-qa="threads_flexpane"])){grid-template-columns:0 minmax(0,1fr)!important}` +
+	`.p-client_workspace__tabpanel:not(:has([data-qa="threads_flexpane"])) .p-view_contents--sidebar{display:none!important}`
+
 func localDay(ts string) (string, error) {
 	parts := strings.Split(ts, ".")
 	if len(parts) > 2 || len(parts[0]) != 10 {
@@ -371,7 +376,7 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 		if err != nil {
 			return frames, err
 		}
-		if err = b.wheel(pane, math.Max(1, rect.height()*0.9)); err != nil {
+		if err = b.wheel(pane, math.Max(1, rect.height()*0.95)); err != nil {
 			return frames, err
 		}
 	}
@@ -503,7 +508,7 @@ func (b *Browser) captureConversation(o Options, out *Output) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = b.styleSheet(`[data-qa="search_tip_banner"]{display:none!important}`)
+	_, err = b.styleSheet(captureSidebarCSS)
 	if err != nil {
 		return 0, err
 	}
