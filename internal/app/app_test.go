@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/css"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/chromedp"
 )
 
@@ -144,11 +146,18 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := b.capturePane(out, pane, out.Stage, frameOptions{}, nil)
+	jumped := false
+	frames, err := b.capturePane(out, pane, out.Stage, frameOptions{}, func(pane cdp.NodeID) error {
+		if jumped {
+			return nil
+		}
+		jumped = true
+		return b.wheel(pane, float64(b.height)*2)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if frames < 6 || len(out.Dates) < 29 {
+	if frames < 6 || len(out.Dates) != 30 {
 		t.Fatalf("lost coverage: %d frames, %d dates", frames, len(out.Dates))
 	}
 	f, err := os.Open(filepath.Join(out.Stage, "000001.png"))
@@ -162,6 +171,37 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	}
 	if image.Width != 1600 || image.Height != 1200 {
 		t.Fatalf("unexpected pixels: %+v", image)
+	}
+	bestEffort, err := NewOutput(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	jumped = false
+	_, err = b.capturePane(bestEffort, pane, bestEffort.Stage, frameOptions{}, func(pane cdp.NodeID) error {
+		if jumped {
+			return nil
+		}
+		jumped = true
+		if err := b.wheel(pane, float64(b.height)*2); err != nil {
+			return err
+		}
+		anchor, err := b.first(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%d"]`, base), pane)
+		if err != nil {
+			return err
+		}
+		_, err = chromedp.Call(b.ctx, dom.RemoveNode, dom.RemoveNodeParams{NodeID: anchor})
+		return err
+	})
+	if err != nil || !bestEffort.Dates["2026-10-30"] || len(bestEffort.Gaps) != 1 {
+		t.Fatalf("best effort did not continue with a gap warning: %v %v %v", bestEffort.Dates, bestEffort.Gaps, err)
+	}
+	path, err := bestEffort.Finish("fixture", "Channel screenshots: 1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(filepath.Join(path, "COMPLETE.txt"))
+	if err != nil || !strings.Contains(string(marker), "WARNING: 1 possible screenshot gap(s)") || !strings.Contains(string(marker), bestEffort.Gaps[0]) {
+		t.Fatalf("missing gap warning in completion marker: %s %v", marker, err)
 	}
 }
 

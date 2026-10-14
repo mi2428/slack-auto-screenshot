@@ -20,6 +20,7 @@ type Output struct {
 	Dates       map[string]bool
 	Saved       map[string]bool
 	Missing     map[string]MissingFile
+	Gaps        []string
 }
 
 func NewOutput(root string) (*Output, error) {
@@ -111,6 +112,9 @@ func (o *Output) Finish(name, summary string, compress bool) (string, error) {
 		return "", err
 	}
 	marker := filepath.Join(output, "COMPLETE.txt")
+	if len(o.Gaps) > 0 {
+		summary += fmt.Sprintf("\nWARNING: %d possible screenshot gap(s); capture continued from the next visible messages:\n%s", len(o.Gaps), strings.Join(o.Gaps, "\n"))
+	}
 	if err = os.WriteFile(marker, []byte(summary+"\nCaptured date range: "+period+"\n"), 0600); err == nil && compress {
 		err = archive(output)
 	}

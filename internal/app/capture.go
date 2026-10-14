@@ -229,7 +229,8 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 			fmt.Printf("Oldest visible range: %s to %s\n", start[0].day, start[len(start)-1].day)
 		}
 	}
-	last, stalled, frames := "", 0, 0
+	last, stalled, frames, recoveries := "", 0, 0, 0
+	var previous []message
 	for range 20000 {
 		messages, err := b.visible(pane, nil)
 		if err != nil {
@@ -238,6 +239,54 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 		if len(messages) == 0 {
 			return frames, errors.New("scroll pane contains no visible messages")
 		}
+		// Opening threads can move the main pane beyond the last photographed messages.
+		if len(previous) > 0 {
+			overlap := false
+			for _, old := range previous {
+				for _, current := range messages {
+					if old.ts == current.ts {
+						overlap = true
+						break
+					}
+				}
+				if overlap {
+					break
+				}
+			}
+			if !overlap {
+				recoveries++
+				if recoveries > 10 {
+					gap := fmt.Sprintf("%s..%s -> %s..%s", previous[0].ts, previous[len(previous)-1].ts, messages[0].ts, messages[len(messages)-1].ts)
+					out.Gaps = append(out.Gaps, gap)
+					fmt.Fprintln(os.Stderr, "WARNING: screenshot overlap could not be restored; continuing with possible gap:", gap)
+				} else {
+					anchor, err := b.nodes(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, previous[0].ts), pane)
+					if err != nil {
+						return frames, err
+					}
+					if len(anchor) > 0 {
+						if _, err := chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: anchor[0]}); err != nil {
+							return frames, err
+						}
+						continue
+					}
+					view, err := b.box(pane)
+					if err != nil {
+						return frames, err
+					}
+					delta := -view.height() * 0.45
+					if messages[0].ts < previous[0].ts {
+						delta = -delta
+					}
+					if err := b.wheel(pane, delta); err != nil {
+						return frames, err
+					}
+					continue
+				}
+			}
+		}
+		recoveries = 0
+		previous = messages
 		if opts.to != "" {
 			past := true
 			for _, m := range messages {
@@ -289,6 +338,7 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 				if saveErr != nil {
 					return frames, saveErr
 				}
+				previous = shot
 				fmt.Printf("Frame %d covers %s to %s (%d messages)\n", frames, shot[0].day, shot[len(shot)-1].day, len(shot))
 			}
 			if onFrame != nil {

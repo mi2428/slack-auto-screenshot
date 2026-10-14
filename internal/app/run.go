@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -76,9 +77,16 @@ func Run(o Options) error {
 			return err
 		}
 		if path == "" {
-			fmt.Println("No messages matched the capture range")
+			if len(out.Gaps) > 0 {
+				fmt.Fprintln(os.Stderr, "WARNING: capture skipped a possible matching range; no screenshots were saved")
+			} else {
+				fmt.Println("No messages matched the capture range")
+			}
 		} else {
 			fmt.Printf("%s\n%s\n", summary, path)
+			if len(out.Gaps) > 0 {
+				fmt.Fprintf(os.Stderr, "WARNING: %d possible screenshot gap(s); see COMPLETE.txt in %s\n", len(out.Gaps), path)
+			}
 			if o.Gzip {
 				fmt.Println("Archive:", path+".tar.gz")
 			}
