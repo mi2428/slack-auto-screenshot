@@ -285,9 +285,11 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 					clip = &page.Viewport{X: 0, Y: 0, Width: float64(b.width), Height: height, Scale: 1}
 				}
 				frames++
-				if _, err = b.save(out, pane, clip, filepath.Join(directory, fmt.Sprintf("%s%06d.png", opts.prefix, frames))); err != nil {
-					return frames, err
+				shot, saveErr := b.save(out, pane, clip, filepath.Join(directory, fmt.Sprintf("%s%06d.png", opts.prefix, frames)))
+				if saveErr != nil {
+					return frames, saveErr
 				}
+				fmt.Printf("Frame %d covers %s to %s (%d messages)\n", frames, shot[0].day, shot[len(shot)-1].day, len(shot))
 			}
 			if onFrame != nil {
 				if err = onFrame(pane); err != nil {
@@ -296,6 +298,19 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 			}
 		}
 		if stalled >= 5 {
+			view, err := b.box(pane)
+			if err != nil {
+				return frames, err
+			}
+			loaded, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, pane)
+			if err != nil {
+				return frames, err
+			}
+			for _, id := range loaded {
+				if r, e := b.box(id); e == nil && r.y1 > view.y2+1 {
+					return frames, errors.New("messages remain below the viewport; capture incomplete")
+				}
+			}
 			return frames, nil
 		}
 		rect, err := b.box(pane)
@@ -343,9 +358,13 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 		if err != nil {
 			return err
 		}
+		var pending []string
 		for _, item := range items {
 			bar, err := b.nodes(`[data-qa="reply_bar_view_thread"]`, item)
-			if err != nil || len(bar) == 0 {
+			if err != nil {
+				return err
+			}
+			if len(bar) == 0 {
 				continue
 			}
 			r, err := b.box(bar[0])
@@ -363,11 +382,29 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 			if seen[ts] {
 				continue
 			}
-			if err = b.clickID(bar[0]); err != nil {
-				return err
+			pending = append(pending, ts)
+		}
+		for _, ts := range pending {
+			opened := false
+			for range 2 {
+				selector := fmt.Sprintf(`[data-qa="virtual-list-item"]:has([data-qa="message_container"][data-msg-ts="%s"]) [data-qa="reply_bar_view_thread"]`, ts)
+				bars, e := b.nodes(selector, pane)
+				if e != nil {
+					return e
+				}
+				if len(bars) == 0 {
+					return fmt.Errorf("thread reply bar for %s disappeared", ts)
+				}
+				if e = b.clickID(bars[0]); e != nil {
+					return e
+				}
+				if e = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); e == nil {
+					opened = true
+					break
+				}
 			}
-			if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 20*time.Second); err != nil {
-				return err
+			if !opened {
+				return fmt.Errorf("thread %s did not open after retry", ts)
 			}
 			thread, err := b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
 			if err != nil {

@@ -117,7 +117,7 @@ func TestCaptureVisibleHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var html strings.Builder
-	html.WriteString(`<style>body{margin:0}#pane{height:500px;overflow-y:auto}article{height:110px}</style><input id="search" value="old"><div id="pane" data-qa="slack_kit_scrollbar">`)
+	html.WriteString(`<style>body{margin:0}#pane{height:500px;overflow-y:auto;pointer-events:none}article{height:110px}</style><input id="search" value="old"><div id="pane" data-qa="slack_kit_scrollbar">`)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).Unix()
 	for i := range 30 {
 		fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Post %d</article>`, base+int64(i)*86400, i)
