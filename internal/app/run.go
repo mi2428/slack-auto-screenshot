@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/chromedp"
 )
@@ -320,14 +321,17 @@ func (b *Browser) text(id cdp.NodeID) (string, error) {
 	return chromedp.Run(b.ctx, chromedp.Text([]cdp.NodeID{id}))
 }
 func (b *Browser) clickID(id cdp.NodeID) error {
+	if _, err := chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: id}); err != nil {
+		return err
+	}
+	if err := b.hoverID(id); err != nil {
+		return err
+	}
 	r, err := b.box(id)
 	if err != nil {
 		return err
 	}
 	x, y := r.x1+r.width()/2, r.y1+r.height()/2
-	if err = b.hoverID(id); err != nil {
-		return err
-	}
 	for _, typ := range []input.DispatchMouseEventType{input.DispatchMouseEventTypeMousePressed, input.DispatchMouseEventTypeMouseReleased} {
 		_, err = chromedp.Call(b.ctx, input.DispatchMouseEvent, input.DispatchMouseEventParams{Type: typ, X: x, Y: y, Button: input.MouseButtonLeft, ClickCount: 1})
 		if err != nil {
