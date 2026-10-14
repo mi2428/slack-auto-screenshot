@@ -2,10 +2,12 @@ package app
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"image/png"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,6 +25,12 @@ func TestOptionsAndOutput(t *testing.T) {
 	cmd, _, err := NewCommand().Find([]string{"search"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	scale, _ := cmd.Flags().GetFloat64("scale")
+	width, _ := cmd.Flags().GetInt("width")
+	outputWidth, _ := cmd.Flags().GetInt("output-width")
+	if scale != 1.5 || width != 1440 || outputWidth != 1440 {
+		t.Fatalf("unexpected viewport defaults: %d CSS px, scale %g, %d output px", width, scale, outputWidth)
 	}
 	if err = cmd.ParseFlags([]string{"yourorg.slack.com", "query", "-C", "5", "-B", "2", "-A", "7"}); err != nil {
 		t.Fatal(err)
@@ -205,9 +213,78 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	}
 }
 
+func TestWQHDPortraitScale(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cmd, _, err := NewCommand().Find([]string{"capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	width, _ := cmd.Flags().GetInt("width")
+	scale, _ := cmd.Flags().GetFloat64("scale")
+	outputWidth, _ := cmd.Flags().GetInt("output-width")
+	if width != 1440 || scale != 1.5 || outputWidth != 1440 {
+		t.Fatalf("viewport flags: %d, %.2f", width, scale)
+	}
+	for _, invalid := range []float64{math.NaN(), math.Inf(1)} {
+		o := Options{Width: 1440, Scale: invalid, Output: t.TempDir()}
+		if validate(&o, "9:16") == nil {
+			t.Fatalf("invalid scale accepted: %v", invalid)
+		}
+	}
+	o := Options{Width: width, Scale: scale, OutputWidth: outputWidth, Output: t.TempDir()}
+	if err = validate(&o, "9:16"); err != nil || o.Height != 2560 {
+		t.Fatalf("portrait viewport: %+v %v", o, err)
+	}
+	b, err := OpenBrowser(o, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.navigate("data:text/html,<body>WQHD</body>"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := b.screenshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil || image.Width != 1440 || image.Height != 2560 {
+		t.Fatalf("WQHD PNG: %+v %v", image, err)
+	}
+}
+
+func TestWideCSSViewportScaledScreenshot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 2160, Height: 3840, Scale: 1.5, OutputWidth: 1440}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.navigate("data:text/html,<body>Wide layout</body>"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := b.screenshot(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image.Width != 1440 || image.Height != 2560 {
+		t.Fatalf("WQHD image from wide CSS layout: %dx%d", image.Width, image.Height)
+	}
+}
+
 func TestThreadReplyAndSearchContext(t *testing.T) {
 	t.Chdir(t.TempDir())
-	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 2}, false)
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1.5, OutputWidth: 600}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +359,38 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 	items, err := os.ReadDir(filepath.Join(out.Stage, "search"))
 	if err != nil || len(items) == 0 {
 		t.Fatalf("search context: %v %v", items, err)
+	}
+}
+
+func TestWaitThreadClosedAfterReplacement(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.navigate("data:text/html," + url.PathEscape(`<div id="old" data-qa="threads_flexpane">Old</div><div id="new" data-qa="threads_flexpane">Still open</div>`)); err != nil {
+		t.Fatal(err)
+	}
+	old, err := b.first("#old", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = chromedp.Call(b.ctx, dom.RemoveNode, dom.RemoveNodeParams{NodeID: old}); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.waitThreadClosed(); err == nil {
+		t.Fatal("a replacement thread pane is still visible")
+	}
+	fresh, err := b.first("#new", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = chromedp.Call(b.ctx, dom.SetAttributeValue, dom.SetAttributeValueParams{NodeID: fresh, Name: "style", Value: "display:none"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.waitThreadClosed(); err != nil {
+		t.Fatal(err)
 	}
 }
 

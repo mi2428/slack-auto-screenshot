@@ -152,11 +152,15 @@ func (b *Browser) save(out *Output, pane cdp.NodeID, clip *page.Viewport, file s
 	if err != nil || format != "png" {
 		return nil, fmt.Errorf("invalid PNG screenshot: %w", err)
 	}
-	height := b.height
+	height := float64(b.height)
 	if clip != nil {
-		height = int(clip.Height)
+		height = clip.Height
 	}
-	if conf.Width != b.width*b.scale || conf.Height != height*b.scale {
+	pixelScale := b.scale
+	if b.outputWidth != 0 {
+		pixelScale = float64(b.outputWidth) / float64(b.width)
+	}
+	if conf.Width != int(math.Round(float64(b.width)*pixelScale)) || conf.Height != int(math.Round(height*pixelScale)) {
 		return nil, fmt.Errorf("unexpected PNG dimensions: %dx%d", conf.Width, conf.Height)
 	}
 	if err = os.WriteFile(file, data, 0600); err != nil {
@@ -481,14 +485,10 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 					return reset
 				}
 			}
-			active, e := b.first(`[data-qa="threads_flexpane"]`, 0)
-			if e != nil {
-				return e
-			}
-			if err = b.click(`[data-qa="threads_flexpane"] [data-qa="close_flexpane"]`); err != nil {
+			if err = b.click(`[data-qa="threads_flexpane"] [data-qa="close_flexpane"], [data-qa="threads_flexpane"] [data-qa="unstyled-button"][aria-label="Close"]`); err != nil {
 				return err
 			}
-			if err = b.waitThreadClosed(active); err != nil {
+			if err = b.waitThreadClosed(); err != nil {
 				return err
 			}
 			seen[ts] = true

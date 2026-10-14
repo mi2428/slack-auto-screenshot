@@ -211,16 +211,27 @@ func (b *Browser) closeStaleThreads() error {
 		if e = b.clickID(buttons[0]); e != nil {
 			return e
 		}
-		if e = b.waitThreadClosed(visible); e != nil {
+		if e = b.waitThreadClosed(); e != nil {
 			return e
 		}
 	}
 	return errors.New("thread pane remains open")
 }
 
-func (b *Browser) waitThreadClosed(pane cdp.NodeID) error {
+func (b *Browser) waitThreadClosed() error {
 	for range 40 {
-		if _, err := b.box(pane); err != nil {
+		panes, err := b.nodes(`[data-qa="threads_flexpane"]`, 0)
+		if err != nil {
+			return err
+		}
+		visible := false
+		for _, pane := range panes {
+			if _, err := b.box(pane); err == nil {
+				visible = true
+				break
+			}
+		}
+		if !visible {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)

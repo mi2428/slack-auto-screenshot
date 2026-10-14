@@ -16,7 +16,8 @@ import (
 type Options struct {
 	Command, Domain, Target, Query string
 	Output, Theme, From, To        string
-	Width, Height, Scale           int
+	Width, Height, OutputWidth     int
+	Scale                          float64
 	Before, After, Limit           int
 	Gzip                           bool
 }
@@ -111,17 +112,25 @@ func NewCommand() *cobra.Command {
 }
 
 func common(cmd *cobra.Command, o *Options, ratio *string) {
-	o.Width, o.Height = 2160, 3840
-	cmd.Flags().IntVarP(&o.Scale, "scale", "s", 2, "Device scale factor (1–4; default 2)")
-	cmd.Flags().StringVar(ratio, "aspect-ratio", "9:16", "Viewport aspect ratio at a fixed 2160 CSS-pixel width")
+	o.Width, o.Height = 1440, 2560
+	cmd.Flags().IntVar(&o.Width, "width", 1440, "Viewport width in CSS pixels")
+	cmd.Flags().IntVar(&o.OutputWidth, "output-width", 1440, "Output PNG width in pixels (0: native resolution)")
+	cmd.Flags().Float64VarP(&o.Scale, "scale", "s", 1.5, "Device scale factor (1–4)")
+	cmd.Flags().StringVar(ratio, "aspect-ratio", "9:16", "Viewport aspect ratio at the selected CSS-pixel width")
 	cmd.Flags().StringVar(&o.Theme, "theme", "", "Capture-page theme: light or dark")
 	cmd.Flags().StringVar(&o.Output, "output", "captures", "Parent output directory")
 	cmd.Flags().BoolVar(&o.Gzip, "gzip", false, "Archive the folder as tar.gz while retaining PNGs")
 }
 
 func validate(o *Options, ratio string) error {
-	if o.Scale < 1 || o.Scale > 4 {
-		return errors.New("scale must be an integer from 1 to 4")
+	if math.IsNaN(o.Scale) || math.IsInf(o.Scale, 0) || o.Scale < 1 || o.Scale > 4 {
+		return errors.New("scale must be between 1 and 4")
+	}
+	if o.Width < 300 || o.Width > 8192 {
+		return errors.New("viewport width must be between 300 and 8192 CSS pixels")
+	}
+	if o.OutputWidth != 0 && (o.OutputWidth < 300 || o.OutputWidth > 8192) {
+		return errors.New("output width must be between 300 and 8192 pixels")
 	}
 	if o.Theme != "" && o.Theme != "light" && o.Theme != "dark" {
 		return errors.New("theme must be light or dark")

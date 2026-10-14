@@ -24,10 +24,11 @@ import (
 )
 
 type Browser struct {
-	ctx                  context.Context
-	close                func()
-	width, height, scale int
-	theme                string
+	ctx                        context.Context
+	close                      func()
+	width, height, outputWidth int
+	scale                      float64
+	theme                      string
 }
 
 func OpenBrowser(o Options, visible bool) (*Browser, error) {
@@ -55,14 +56,14 @@ func OpenBrowser(o Options, visible bool) (*Browser, error) {
 		cancelAlloc()
 		return nil, err
 	}
-	return &Browser{ctx: ctx, close: func() { cancelTab(); cancelAlloc() }, width: o.Width, height: o.Height, scale: o.Scale, theme: o.Theme}, nil
+	return &Browser{ctx: ctx, close: func() { cancelTab(); cancelAlloc() }, width: o.Width, height: o.Height, outputWidth: o.OutputWidth, scale: o.Scale, theme: o.Theme}, nil
 }
 
 func (b *Browser) Close() { b.close() }
 
 func (b *Browser) setup() error {
 	_, err := chromedp.Call(b.ctx, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{
-		Width: int64(b.width), Height: int64(b.height), DeviceScaleFactor: float64(b.scale), Mobile: false,
+		Width: int64(b.width), Height: int64(b.height), DeviceScaleFactor: b.scale, Mobile: false,
 	})
 	return err
 }
@@ -334,6 +335,14 @@ func (b *Browser) styleSheet(rule string) (cdp.StyleSheetID, error) {
 func (b *Browser) screenshot(clip *page.Viewport) ([]byte, error) {
 	if err := b.setTheme(); err != nil {
 		return nil, err
+	}
+	if b.outputWidth != 0 {
+		viewport := page.Viewport{Width: float64(b.width), Height: float64(b.height)}
+		if clip != nil {
+			viewport = *clip
+		}
+		viewport.Scale = float64(b.outputWidth) / (float64(b.width) * b.scale)
+		clip = &viewport
 	}
 	params := page.CaptureScreenshotParams{Format: page.CaptureScreenshotFormatPng, Clip: clip}
 	r, err := chromedp.Call(b.ctx, page.CaptureScreenshot, params)

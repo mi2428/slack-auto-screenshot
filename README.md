@@ -25,14 +25,16 @@ Usage:
   slack-auto-screenshot capture <conversation-URL> | <workspace-domain> '#channel' [flags]
 
 Flags:
-      --aspect-ratio string   Viewport aspect ratio at a fixed 2160 CSS-pixel width (default "9:16")
+      --aspect-ratio string   Viewport aspect ratio at the selected CSS-pixel width (default "9:16")
       --from string           Inclusive start date (YYYY-MM-DD; requires --to)
       --gzip                  Archive the folder as tar.gz while retaining PNGs
   -h, --help                  help for capture
       --output string         Parent output directory (default "captures")
-  -s, --scale int             Device scale factor (1–4; default 2) (default 2)
+      --output-width int      Output PNG width in pixels (0: native resolution) (default 1440)
+  -s, --scale float           Device scale factor (1–4) (default 1.5)
       --theme string          Capture-page theme: light or dark
       --to string             Inclusive end date (YYYY-MM-DD; requires --from)
+      --width int             Viewport width in CSS pixels (default 1440)
 ```
 
 ```console
@@ -41,15 +43,17 @@ Usage:
 
 Flags:
   -A, --after int             Number of messages after a hit (default 20)
-      --aspect-ratio string   Viewport aspect ratio at a fixed 2160 CSS-pixel width (default "9:16")
+      --aspect-ratio string   Viewport aspect ratio at the selected CSS-pixel width (default "9:16")
   -B, --before int            Number of messages before a hit (default 20)
   -C, --context int           Default number of messages before and after a hit (default 20)
       --gzip                  Archive the folder as tar.gz while retaining PNGs
   -h, --help                  help for search
       --limit int             Maximum number of search hits (default: all)
       --output string         Parent output directory (default "captures")
-  -s, --scale int             Device scale factor (1–4; default 2) (default 2)
+      --output-width int      Output PNG width in pixels (0: native resolution) (default 1440)
+  -s, --scale float           Device scale factor (1–4) (default 1.5)
       --theme string          Capture-page theme: light or dark
+      --width int             Viewport width in CSS pixels (default 1440)
 ```
 
 ## License
