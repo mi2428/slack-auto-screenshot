@@ -57,6 +57,14 @@ func localDay(ts string) (string, error) {
 	return time.Unix(secs, 0).Local().Format("2006-01-02"), nil
 }
 
+func needsThreadDateScan(ts, from, to string) (bool, error) {
+	day, err := localDay(ts)
+	if err != nil {
+		return false, err
+	}
+	return day < from || day > to, nil
+}
+
 func overlaps(a, b bounds) bool { return a.x2 > b.x1 && a.x1 < b.x2 && a.y2 > b.y1 && a.y1 < b.y2 }
 
 func (b *Browser) visible(pane cdp.NodeID, clip *page.Viewport) ([]message, error) {
@@ -109,7 +117,7 @@ func (b *Browser) oldest(pane cdp.NodeID) error {
 		if len(loaded) > 0 {
 			_, err = chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: loaded[0]})
 			if err != nil {
-				return err
+				return fmt.Errorf("scroll oldest message: %w", err)
 			}
 		}
 		box, err := b.box(pane)
@@ -227,7 +235,7 @@ func (b *Browser) scan(pane cdp.NodeID, from, to string) (bool, error) {
 
 func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, opts frameOptions, onFrame func(cdp.NodeID) error) (int, error) {
 	if err := b.oldest(pane); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("reach oldest message for %s: %w", opts.prefix, err)
 	}
 	if opts.from != "" {
 		start, err := b.visible(pane, nil)
@@ -345,14 +353,14 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 				frames++
 				shot, saveErr := b.save(out, pane, clip, filepath.Join(directory, fmt.Sprintf("%s%06d.png", opts.prefix, frames)))
 				if saveErr != nil {
-					return frames, saveErr
+					return frames, fmt.Errorf("save frame %s%d: %w", opts.prefix, frames, saveErr)
 				}
 				previous = shot
 				fmt.Printf("Frame %d covers %s to %s (%d messages)\n", frames, shot[0].day, shot[len(shot)-1].day, len(shot))
 			}
 			if onFrame != nil {
 				if err = onFrame(pane); err != nil {
-					return frames, err
+					return frames, fmt.Errorf("process threads after frame %d: %w", frames, err)
 				}
 			}
 		}
@@ -447,17 +455,10 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 			opened := false
 			for range 2 {
 				selector := fmt.Sprintf(`[data-qa="virtual-list-item"]:has([data-qa="message_container"][data-msg-ts="%s"]) [data-qa="reply_bar_view_thread"]`, ts)
-				bars, e := b.nodes(selector, pane)
-				if e != nil {
+				if e := b.click(selector); e != nil {
 					return e
 				}
-				if len(bars) == 0 {
-					return fmt.Errorf("thread reply bar for %s disappeared", ts)
-				}
-				if e = b.clickID(bars[0]); e != nil {
-					return e
-				}
-				if e = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); e == nil {
+				if e := b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); e == nil {
 					opened = true
 					break
 				}
@@ -471,7 +472,14 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 			}
 			relevant := true
 			if o.From != "" {
-				relevant, err = b.scan(thread, o.From, o.To)
+				needsScan, e := needsThreadDateScan(ts, o.From, o.To)
+				if e != nil {
+					return e
+				}
+				// The parent itself makes an in-range thread relevant.
+				if needsScan {
+					relevant, err = b.scan(thread, o.From, o.To)
+				}
 				if err != nil {
 					return err
 				}

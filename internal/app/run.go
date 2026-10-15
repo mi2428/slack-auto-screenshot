@@ -341,7 +341,7 @@ func (b *Browser) text(id cdp.NodeID) (string, error) {
 }
 func (b *Browser) clickID(id cdp.NodeID) error {
 	if _, err := chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: id}); err != nil {
-		return err
+		return fmt.Errorf("scroll click target node %d: %w", id, err)
 	}
 	if err := b.hoverID(id); err != nil {
 		return err

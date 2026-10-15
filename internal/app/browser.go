@@ -83,7 +83,7 @@ func (b *Browser) nodes(sel string, parent cdp.NodeID) ([]cdp.NodeID, error) {
 	if parent == 0 {
 		nodes, err := chromedp.Run(b.ctx, chromedp.Nodes(sel, chromedp.AtLeast(0)))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("query %s: %w", sel, err)
 		}
 		ids := make([]cdp.NodeID, len(nodes))
 		for i, n := range nodes {
@@ -93,7 +93,7 @@ func (b *Browser) nodes(sel string, parent cdp.NodeID) ([]cdp.NodeID, error) {
 	}
 	list, err := chromedp.Call(b.ctx, dom.QuerySelectorAll, dom.QuerySelectorAllParams{NodeID: parent, Selector: sel})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query %s under node %d: %w", sel, parent, err)
 	}
 	return list.NodeIDs, nil
 }
@@ -112,7 +112,7 @@ func (b *Browser) first(sel string, parent cdp.NodeID) (cdp.NodeID, error) {
 func (b *Browser) attr(id cdp.NodeID, name string) (string, error) {
 	r, err := chromedp.Call(b.ctx, dom.GetAttributes, dom.GetAttributesParams{NodeID: id})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read attribute %s on node %d: %w", name, id, err)
 	}
 	for i := 0; i+1 < len(r.Attributes); i += 2 {
 		if r.Attributes[i] == name {
@@ -336,6 +336,9 @@ func (b *Browser) screenshot(clip *page.Viewport) ([]byte, error) {
 	if err := b.setTheme(); err != nil {
 		return nil, err
 	}
+	if err := b.waitFileImages(); err != nil {
+		return nil, err
+	}
 	if b.outputWidth != 0 {
 		viewport := page.Viewport{Width: float64(b.width), Height: float64(b.height)}
 		if clip != nil {
@@ -350,6 +353,31 @@ func (b *Browser) screenshot(clip *page.Viewport) ([]byte, error) {
 		return nil, err
 	}
 	return r.Data, nil
+}
+
+func (b *Browser) waitFileImages() error {
+	ctx, cancel := context.WithTimeout(b.ctx, 12*time.Second)
+	defer cancel()
+	const pendingImages = `Array.from(document.querySelectorAll('[data-qa="message_kit_files"] img')).filter(i => {const r=i.getBoundingClientRect();return r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0&&r.left<innerWidth&&r.right>0&&!i.complete}).length`
+	waited := false
+	for {
+		pending, err := chromedp.Run(ctx, chromedp.Evaluate[int](pendingImages))
+		if err != nil {
+			return fmt.Errorf("check visible attachment images: %w", err)
+		}
+		if pending == 0 {
+			if waited {
+				_, err = chromedp.Run(ctx, chromedp.Evaluate[chromedp.Void](`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`, chromedp.EvalAwaitPromise))
+			}
+			return err
+		}
+		waited = true
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%d visible attachment image(s) did not finish loading: %w", pending, ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 var clientPath = regexp.MustCompile(`^/client/([A-Z0-9]+)(?:/|$)`)

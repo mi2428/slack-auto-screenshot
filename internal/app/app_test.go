@@ -5,12 +5,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"image"
+	"image/color"
 	"image/png"
 	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +118,30 @@ func TestOptionsAndOutput(t *testing.T) {
 	}
 	if contents["000001.png"] != "fixture" || !strings.Contains(contents["MISSING_FILES.txt"], "Missing attachments: 1") || !strings.Contains(contents["MISSING_FILES.txt"], "F123") || !strings.Contains(contents["COMPLETE.txt"], "Captured date range:") || !strings.Contains(contents["COMPLETE.txt"], "1 missing") {
 		t.Fatalf("archive contents: %v", contents)
+	}
+}
+
+func TestThreadDateScanOnlyForParentsOutsideRange(t *testing.T) {
+	for _, tc := range []struct {
+		date string
+		want bool
+	}{
+		{"2023-02-28", true},
+		{"2023-03-01", false},
+		{"2026-10-15", false},
+		{"2026-10-16", true},
+	} {
+		date, err := time.ParseInLocation("2006-01-02", tc.date, time.Local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := needsThreadDateScan(fmt.Sprintf("%d.000001", date.Add(12*time.Hour).Unix()), "2023-03-01", "2026-10-15")
+		if err != nil || got != tc.want {
+			t.Fatalf("parent %s: needs scan %v, want %v: %v", tc.date, got, tc.want, err)
+		}
+	}
+	if _, err := needsThreadDateScan("invalid", "2023-03-01", "2026-10-15"); err == nil {
+		t.Fatal("invalid parent timestamp accepted")
 	}
 }
 
@@ -298,6 +327,94 @@ func TestWQHDPortraitScale(t *testing.T) {
 	image, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil || image.Width != 1440 || image.Height != 2560 {
 		t.Fatalf("WQHD PNG: %+v %v", image, err)
+	}
+}
+
+func TestScreenshotWaitsForAttachmentImage(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	image := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	image.Set(0, 0, color.RGBA{R: 200, A: 255})
+	var contents bytes.Buffer
+	if err = png.Encode(&contents, image); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			_, _ = io.WriteString(w, `<body style="margin:0"><div data-qa="message_kit_files"><img id="preview" style="width:100px;height:100px"></div></body>`)
+			return
+		}
+		if r.URL.Path != "/image" {
+			http.NotFound(w, r)
+			return
+		}
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(contents.Bytes())
+	}))
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		server.Close()
+	}()
+	if err = b.navigate(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = chromedp.Run(b.ctx, chromedp.Evaluate[chromedp.Void](`document.getElementById('preview').src=`+strconv.Quote(server.URL+"/image"))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("attachment image request did not start")
+	}
+	pending, err := chromedp.Run(b.ctx, chromedp.Evaluate[int](`Array.from(document.querySelectorAll('[data-qa="message_kit_files"] img')).filter(i=>{const r=i.getBoundingClientRect();return r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0&&r.left<innerWidth&&r.right>0&&!i.complete}).length`))
+	if err != nil || pending != 1 {
+		t.Fatalf("expected pending file image before screenshot: %d %v", pending, err)
+	}
+	result := make(chan struct {
+		data []byte
+		err  error
+	}, 1)
+	go func() {
+		data, err := b.screenshot(nil)
+		result <- struct {
+			data []byte
+			err  error
+		}{data, err}
+	}()
+	select {
+	case <-result:
+		t.Fatal("captured incomplete attachment image")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	shot := <-result
+	if shot.err != nil {
+		t.Fatal(shot.err)
+	}
+	decoded, err := png.Decode(bytes.NewReader(shot.data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, g, blue, _ := decoded.At(50, 50).RGBA()
+	if r < 0xc000 || g > 0x2000 || blue > 0x2000 {
+		t.Fatalf("preview was not rendered: %04x %04x %04x", r, g, blue)
 	}
 }
 
