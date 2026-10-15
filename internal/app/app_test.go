@@ -145,6 +145,59 @@ func TestThreadDateScanOnlyForParentsOutsideRange(t *testing.T) {
 	}
 }
 
+func TestWheelMovesViewportFractionAcrossScales(t *testing.T) {
+	for _, scale := range []float64{1.5, 2} {
+		t.Run(fmt.Sprintf("scale%g", scale), func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			b, err := OpenBrowser(Options{Width: 1440, Height: 2560, Scale: scale, OutputWidth: 1440}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer b.Close()
+			if err = b.setup(); err != nil {
+				t.Fatal(err)
+			}
+			var html strings.Builder
+			html.WriteString(`<style>body{margin:0;overflow:hidden}#pane{height:2325px;overflow-y:auto}article{height:500px}</style><div id="pane">`)
+			base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).Unix()
+			for i := range 30 {
+				fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Post %d</article>`, base+int64(i)*86400, i)
+			}
+			html.WriteString(`</div>`)
+			if err = b.navigate("data:text/html," + url.PathEscape(html.String())); err != nil {
+				t.Fatal(err)
+			}
+			pane, err := b.first("#pane", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rect, err := b.box(pane)
+			if err != nil {
+				t.Fatal(err)
+			}
+			top := 0.0
+			// Do not install wheel listeners: they can change Chrome's input routing.
+			for _, direction := range []float64{1, 1, -1} {
+				if _, err = b.screenshot(nil); err != nil {
+					t.Fatal(err)
+				}
+				delta := rect.height() * 0.95 * direction
+				if err = b.wheel(pane, delta); err != nil {
+					t.Fatal(err)
+				}
+				after, err := chromedp.Run(b.ctx, chromedp.Evaluate[float64](`document.getElementById('pane').scrollTop`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if math.Abs(after-top-delta) > 1 {
+					t.Fatalf("wheel moved %.2f CSS px, want %.2f (95%% of pane)", after-top, delta)
+				}
+				top = after
+			}
+		})
+	}
+}
+
 func TestCaptureVisibleHistory(t *testing.T) {
 	t.Chdir(t.TempDir())
 	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 2}, false)
@@ -156,7 +209,7 @@ func TestCaptureVisibleHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var html strings.Builder
-	html.WriteString(`<style>body{margin:0}#pane{height:500px;overflow-y:auto;pointer-events:none}article{height:110px}</style><input id="search" value="old"><div id="pane" data-qa="slack_kit_scrollbar">`)
+	html.WriteString(`<style>body{margin:0}#pane{height:500px;overflow-y:auto}article{height:110px}</style><input id="search" value="old"><div id="pane" data-qa="slack_kit_scrollbar">`)
 	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).Unix()
 	for i := range 30 {
 		fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Post %d</article>`, base+int64(i)*86400, i)
@@ -222,12 +275,17 @@ func TestCaptureVisibleHistory(t *testing.T) {
 		if err := b.wheel(pane, float64(b.height)*2); err != nil {
 			return err
 		}
-		anchor, err := b.first(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%d"]`, base), pane)
-		if err != nil {
-			return err
+		// Remove earlier history so native backward scrolling cannot restore it.
+		for i := range 10 {
+			anchor, err := b.first(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%d"]`, base+int64(i)*86400), pane)
+			if err != nil {
+				return err
+			}
+			if _, err = chromedp.Call(b.ctx, dom.RemoveNode, dom.RemoveNodeParams{NodeID: anchor}); err != nil {
+				return err
+			}
 		}
-		_, err = chromedp.Call(b.ctx, dom.RemoveNode, dom.RemoveNodeParams{NodeID: anchor})
-		return err
+		return nil
 	})
 	if err != nil || !bestEffort.Dates["2026-10-30"] || len(bestEffort.Gaps) != 1 {
 		t.Fatalf("best effort did not continue with a gap warning: %v %v %v", bestEffort.Dates, bestEffort.Gaps, err)

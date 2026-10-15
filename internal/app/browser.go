@@ -43,6 +43,9 @@ func OpenBrowser(o Options, visible bool) (*Browser, error) {
 	opts = append(opts, chromedp.UserDataDir(profile))
 	if visible {
 		opts = append(opts, chromedp.VisibleWindow)
+	} else {
+		// Native wheel hit testing also needs a window large enough for the viewport.
+		opts = append(opts, chromedp.WindowSize(o.Width, o.Height))
 	}
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	ctx, cancelTab := chromedp.NewContext(alloc)
@@ -173,14 +176,6 @@ func (b *Browser) box(id cdp.NodeID) (bounds, error) {
 }
 
 func (b *Browser) wheel(pane cdp.NodeID, delta float64) error {
-	var before string
-	if delta > 0 {
-		messages, err := b.visible(pane, nil)
-		if err != nil {
-			return err
-		}
-		before = signature(messages)
-	}
 	box, err := b.box(pane)
 	if err != nil {
 		return err
@@ -190,33 +185,6 @@ func (b *Browser) wheel(pane cdp.NodeID, delta float64) error {
 		return err
 	}
 	time.Sleep(700 * time.Millisecond)
-	if delta > 0 {
-		messages, err := b.visible(pane, nil)
-		if err != nil {
-			return err
-		}
-		if signature(messages) == before {
-			ids, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, pane)
-			if err != nil {
-				return err
-			}
-			var next cdp.NodeID
-			for _, id := range ids {
-				r, e := b.box(id)
-				if e != nil || r.y1 <= box.y2 {
-					continue
-				}
-				next = id
-				break
-			}
-			if next != 0 {
-				if _, err = chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: next}); err != nil {
-					return err
-				}
-				time.Sleep(250 * time.Millisecond)
-			}
-		}
-	}
 	return nil
 }
 
