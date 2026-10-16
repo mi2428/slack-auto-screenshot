@@ -277,6 +277,38 @@ func TestAuthHasDeadline(t *testing.T) {
 	}
 }
 
+func TestSearchContextHasDeadline(t *testing.T) {
+	t.Chdir(t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(5 * time.Second):
+			}
+			return
+		}
+		_, _ = io.WriteString(w, `<style>#pane{height:500px;overflow-y:auto}article{height:200px}</style><div data-qa="message_pane"><div id="pane" data-qa="slack_kit_scrollbar"><article data-qa="message_container" data-msg-ts="1730000000.000000"><div data-qa="message_kit_files"><img id="slow" style="width:100px;height:100px"></div></article></div></div>`)
+	}))
+	defer server.Close()
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.navigate(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = chromedp.Run(b.ctx, chromedp.Evaluate[chromedp.Void](`document.getElementById('slow').src=`+strconv.Quote(server.URL+"/slow"))); err != nil {
+		t.Fatal(err)
+	}
+	out := &Output{Stage: t.TempDir(), Dates: map[string]bool{}, Saved: map[string]bool{}, Missing: map[string]MissingFile{}}
+	started := time.Now()
+	err = b.captureContextWithin("1730000000.000000", "1730000000.000000", filepath.Join(out.Stage, "hit"), Options{}, out, false, nil, 50*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("search context deadline: elapsed=%s err=%v", time.Since(started), err)
+	}
+}
+
 func TestWheelWaitsForDelayedVisibleMessages(t *testing.T) {
 	t.Chdir(t.TempDir())
 	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)

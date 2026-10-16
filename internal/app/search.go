@@ -29,6 +29,7 @@ const keychainTokenLabel = "slack-auto-screenshot-user-token"
 const searchHitAttempts = 3
 const searchStateVersion = 2
 const searchNavigationTimeout = 30 * time.Second
+const searchContextTimeout = 5 * time.Minute
 
 var archiveLink = regexp.MustCompile(`/archives/([A-Z0-9]+)/p(\d{10})(\d{6})(?:[^0-9]|$)`)
 var messageTimestamp = regexp.MustCompile(`^\d{10}\.\d{6}$`)
@@ -1132,6 +1133,16 @@ func (b *Browser) positionPaneMessageWithin(pane cdp.NodeID, target string, limi
 }
 
 func (b *Browser) captureContext(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
+	return b.captureContextWithin(ts, parent, directory, o, out, reusePane, captured, searchContextTimeout)
+}
+
+func (b *Browser) captureContextWithin(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool, timeout time.Duration) error {
+	return b.within(timeout, func() error {
+		return b.captureContextRun(ts, parent, directory, o, out, reusePane, captured)
+	})
+}
+
+func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
 	started := time.Now()
 	defer func() { fmt.Printf("Search context capture: %d ms\n", time.Since(started).Milliseconds()) }()
 	var pane, mainPane cdp.NodeID
