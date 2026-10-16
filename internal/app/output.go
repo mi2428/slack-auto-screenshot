@@ -108,32 +108,34 @@ func (o *Output) Finish(name, summary string, compress bool) (string, error) {
 	if err = os.Remove(output); err != nil {
 		return "", err
 	}
-	if err = os.Rename(o.Stage, output); err != nil {
-		return "", err
-	}
-	marker := filepath.Join(output, "COMPLETE.txt")
+	marker := filepath.Join(o.Stage, "COMPLETE.txt")
 	if len(o.Gaps) > 0 {
 		summary += fmt.Sprintf("\nWARNING: %d possible screenshot gap(s); capture continued from the next visible messages:\n%s", len(o.Gaps), strings.Join(o.Gaps, "\n"))
 	}
 	if err = os.WriteFile(marker, []byte(summary+"\nCaptured date range: "+period+"\n"), 0600); err == nil && compress {
-		err = archive(output)
+		err = archive(o.Stage, output)
 	}
 	if err != nil {
 		_ = os.Remove(marker)
-		return "", fmt.Errorf("could not finalize output; PNGs remain at %s: %w", output, err)
+		return "", fmt.Errorf("could not finalize output; PNGs remain at %s: %w", o.Stage, err)
+	}
+	if err = os.Rename(o.Stage, output); err != nil {
+		_ = os.Remove(marker)
+		_ = os.Remove(output + ".tar.gz")
+		return "", fmt.Errorf("could not finalize output; PNGs remain at %s: %w", o.Stage, err)
 	}
 	return output, nil
 }
 
-func archive(output string) (err error) {
+func archive(input, output string) (err error) {
 	f, err := os.CreateTemp(filepath.Dir(output), ".archive-*.partial")
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
-	err = filepath.WalkDir(output, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(input, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -144,7 +146,7 @@ func archive(output string) (err error) {
 		if !info.IsDir() && !info.Mode().IsRegular() {
 			return fmt.Errorf("special file in archive input: %s", path)
 		}
-		rel, e := filepath.Rel(filepath.Dir(output), path)
+		rel, e := filepath.Rel(input, path)
 		if e != nil {
 			return e
 		}
@@ -152,7 +154,7 @@ func archive(output string) (err error) {
 		if e != nil {
 			return e
 		}
-		hdr.Name = filepath.ToSlash(rel)
+		hdr.Name = filepath.ToSlash(filepath.Join(filepath.Base(output), rel))
 		if entry.IsDir() {
 			hdr.Name += "/"
 		}
@@ -166,9 +168,12 @@ func archive(output string) (err error) {
 		if e != nil {
 			return e
 		}
-		defer file.Close()
-		_, e = io.Copy(tw, file)
-		return e
+		_, copyErr := io.Copy(tw, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
 	})
 	if e := tw.Close(); err == nil {
 		err = e
