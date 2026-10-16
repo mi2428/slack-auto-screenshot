@@ -31,6 +31,8 @@ type Browser struct {
 	theme                      string
 }
 
+const slackAppReady = `[data-qa="top_nav_search"], [data-qa="message_pane"]`
+
 func OpenBrowser(o Options, visible bool) (*Browser, error) {
 	profile, err := filepath.Abs(".slack-browser")
 	if err != nil {
@@ -59,7 +61,13 @@ func OpenBrowser(o Options, visible bool) (*Browser, error) {
 		cancelAlloc()
 		return nil, err
 	}
-	return &Browser{ctx: ctx, close: func() { cancelTab(); cancelAlloc() }, width: o.Width, height: o.Height, outputWidth: o.OutputWidth, scale: o.Scale, theme: o.Theme}, nil
+	return &Browser{ctx: ctx, close: func() {
+		closeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_ = chromedp.Cancel(closeCtx)
+		cancelTab()
+		cancelAlloc()
+	}, width: o.Width, height: o.Height, outputWidth: o.OutputWidth, scale: o.Scale, theme: o.Theme}, nil
 }
 
 func (b *Browser) Close() { b.close() }
@@ -72,7 +80,24 @@ func (b *Browser) setup() error {
 }
 
 func (b *Browser) navigate(addr string) error {
-	return chromedp.Do(b.ctx, chromedp.Navigate(addr))
+	return b.navigateWithin(addr, time.Minute)
+}
+
+func (b *Browser) navigateWithin(addr string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(b.ctx, timeout)
+	defer cancel()
+	return chromedp.Do(ctx, chromedp.Navigate(addr))
+}
+
+func (b *Browser) within(timeout time.Duration, action func() error) error {
+	base := b.ctx
+	ctx, cancel := context.WithTimeout(base, timeout)
+	b.ctx = ctx
+	defer func() {
+		b.ctx = base
+		cancel()
+	}()
+	return action()
 }
 func (b *Browser) location() (string, error) { return chromedp.Run(b.ctx, chromedp.Location()) }
 
@@ -125,19 +150,6 @@ func (b *Browser) attr(id cdp.NodeID, name string) (string, error) {
 	return "", nil
 }
 
-func (b *Browser) hasAttr(id cdp.NodeID, name string) (bool, error) {
-	r, err := chromedp.Call(b.ctx, dom.GetAttributes, dom.GetAttributesParams{NodeID: id})
-	if err != nil {
-		return false, err
-	}
-	for i := 0; i+1 < len(r.Attributes); i += 2 {
-		if r.Attributes[i] == name {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (b *Browser) style(id cdp.NodeID, name string) (string, error) {
 	r, err := chromedp.Call(b.ctx, css.GetComputedStyleForNode, css.GetComputedStyleForNodeParams{NodeID: id})
 	if err != nil {
@@ -176,6 +188,10 @@ func (b *Browser) box(id cdp.NodeID) (bounds, error) {
 }
 
 func (b *Browser) wheel(pane cdp.NodeID, delta float64) error {
+	before := ""
+	if messages, err := b.visible(pane, nil); err == nil && len(messages) > 0 {
+		before = signature(messages)
+	}
 	box, err := b.box(pane)
 	if err != nil {
 		return err
@@ -184,7 +200,29 @@ func (b *Browser) wheel(pane cdp.NodeID, delta float64) error {
 	if err != nil {
 		return err
 	}
-	time.Sleep(700 * time.Millisecond)
+	if before == "" {
+		time.Sleep(700 * time.Millisecond)
+		return nil
+	}
+	deadline := time.Now().Add(700 * time.Millisecond)
+	last, changed := before, false
+	var stableSince time.Time
+	for time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		messages, e := b.visible(pane, nil)
+		if e != nil || len(messages) == 0 {
+			continue
+		}
+		now := signature(messages)
+		if now != last {
+			last, changed, stableSince = now, true, time.Now()
+			continue
+		}
+		// Slack can virtualize a scroll in multiple DOM updates; wait for a stable window.
+		if changed && time.Since(stableSince) >= 150*time.Millisecond {
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -354,7 +392,7 @@ func (b *Browser) workspace(domain string) (string, error) {
 	if err := b.navigate("https://" + domain + "/"); err != nil {
 		return "", err
 	}
-	for range 40 {
+	for range 120 {
 		loc, err := b.location()
 		if err != nil {
 			return "", err
@@ -380,7 +418,7 @@ func (b *Browser) workspace(domain string) (string, error) {
 }
 
 func (b *Browser) auth(workspace, domain string) error {
-	for range 40 {
+	for range 120 {
 		loc, err := b.location()
 		if err != nil {
 			return err
@@ -388,7 +426,7 @@ func (b *Browser) auth(workspace, domain string) error {
 		if !strings.HasPrefix(loc, workspace+"/") && loc != workspace {
 			break
 		}
-		if nodes, _ := b.nodes(`[data-qa="top_nav_search"]`, 0); len(nodes) > 0 {
+		if nodes, _ := b.nodes(slackAppReady, 0); len(nodes) > 0 {
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)

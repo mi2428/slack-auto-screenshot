@@ -11,12 +11,16 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
 var conversationID = regexp.MustCompile(`^[CG][A-Z0-9]+$`)
 
 func Run(o Options) error {
+	if o.Command == "search" {
+		return runSearch(o)
+	}
 	b, err := OpenBrowser(o, o.Command == "login")
 	if err != nil {
 		return err
@@ -93,32 +97,7 @@ func Run(o Options) error {
 		}
 		return nil
 	}
-	if err = b.openSearch(workspace, o.Query, o.Domain); err != nil {
-		return err
-	}
-	out, err := NewOutput(o.Output)
-	if err != nil {
-		return err
-	}
-	fmt.Println("Capture destination (incomplete):", out.Stage)
-	count, err := b.captureSearch(workspace, o, out)
-	if err != nil {
-		return err
-	}
-	summary := fmt.Sprintf("Search hits: %d\nAttachments: %d saved, %d missing", count, len(out.Saved), len(out.Missing))
-	path, err := out.Finish(o.Query, summary, o.Gzip)
-	if err != nil {
-		return err
-	}
-	if path == "" {
-		fmt.Println("No search hits were captured")
-	} else {
-		fmt.Printf("%s\n%s\n", summary, path)
-		if o.Gzip {
-			fmt.Println("Archive:", path+".tar.gz")
-		}
-	}
-	return nil
+	return errors.New("unknown command")
 }
 
 func workspaceFor(conversation string) string {
@@ -141,7 +120,7 @@ func login(b *Browser, domain string) error {
 			return err
 		}
 		if strings.HasPrefix(loc, "https://app.slack.com/client/") {
-			if n, _ := b.nodes(`[data-qa="top_nav_search"]`, 0); len(n) > 0 {
+			if n, _ := b.nodes(slackAppReady, 0); len(n) > 0 {
 				stable++
 			} else {
 				stable = 0
@@ -343,31 +322,27 @@ func (b *Browser) clickID(id cdp.NodeID) error {
 	if _, err := chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: id}); err != nil {
 		return fmt.Errorf("scroll click target node %d: %w", id, err)
 	}
-	if err := b.hoverID(id); err != nil {
+	if _, err := b.box(id); err != nil {
 		return err
 	}
-	r, err := b.box(id)
+	resolved, err := chromedp.Call(b.ctx, dom.ResolveNode, dom.ResolveNodeParams{NodeID: id})
+	if err != nil {
+		return fmt.Errorf("resolve click target node %d: %w", id, err)
+	}
+	if resolved.Object == nil || resolved.Object.ObjectID == "" {
+		return fmt.Errorf("resolve click target node %d: no JavaScript object", id)
+	}
+	userGesture := true
+	result, err := chromedp.Call(b.ctx, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
+		FunctionDeclaration: `function(){this.click()}`,
+		ObjectID:            resolved.Object.ObjectID,
+		UserGesture:         &userGesture,
+	})
 	if err != nil {
 		return err
 	}
-	x, y := r.x1+r.width()/2, r.y1+r.height()/2
-	for _, typ := range []input.DispatchMouseEventType{input.DispatchMouseEventTypeMousePressed, input.DispatchMouseEventTypeMouseReleased} {
-		_, err = chromedp.Call(b.ctx, input.DispatchMouseEvent, input.DispatchMouseEventParams{Type: typ, X: x, Y: y, Button: input.MouseButtonLeft, ClickCount: 1})
-		if err != nil {
-			return err
-		}
+	if result.ExceptionDetails != nil {
+		return errors.New("click target raised a JavaScript exception")
 	}
 	return nil
-}
-
-func (b *Browser) hoverID(id cdp.NodeID) error {
-	r, err := b.box(id)
-	if err != nil {
-		return err
-	}
-	_, err = chromedp.Call(b.ctx, input.DispatchMouseEvent, input.DispatchMouseEventParams{Type: input.DispatchMouseEventTypeMouseMoved, X: r.x1 + r.width()/2, Y: r.y1 + r.height()/2, Button: input.MouseButtonNone})
-	if err == nil {
-		time.Sleep(80 * time.Millisecond)
-	}
-	return err
 }

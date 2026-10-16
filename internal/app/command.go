@@ -16,15 +16,18 @@ import (
 type Options struct {
 	Command, Domain, Target, Query string
 	Output, Theme, From, To        string
+	ExcludeAuthor, ExcludeLeading  string
+	ExcludeURLSubstring            string
 	Width, Height, OutputWidth     int
 	Scale                          float64
-	Before, After, Limit           int
+	Before, After, Limit, Offset   int
 	Gzip                           bool
 }
 
 var domainPattern = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.slack\.com$`)
 var conversationPattern = regexp.MustCompile(`^https://app\.slack\.com/client/[^/?#]+/[CDG][A-Z0-9]+/?$`)
 var ratioPart = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
+var authorHandle = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func validDomain(s string) bool {
 	if !domainPattern.MatchString(s) {
@@ -88,19 +91,41 @@ func NewCommand() *cobra.Command {
 	search.Flags().IntVarP(&so.Before, "before", "B", 20, "Number of messages before a hit")
 	search.Flags().IntVarP(&so.After, "after", "A", 20, "Number of messages after a hit")
 	search.Flags().IntVar(&so.Limit, "limit", 0, "Maximum number of search hits (default: all)")
+	search.Flags().IntVar(&so.Offset, "offset", 0, "Skip the first N filtered search hits")
+	search.Flags().StringVar(&so.ExcludeAuthor, "exclude-author", "", "Exclude posts by a Slack username (@name)")
+	search.Flags().StringVar(&so.ExcludeLeading, "exclude-leading-mention", "", "Exclude posts whose text starts with @name")
+	search.Flags().StringVar(&so.ExcludeURLSubstring, "exclude-url-substring", "", "Exclude hits where this text occurs only inside URLs")
 	search.RunE = func(cmd *cobra.Command, args []string) error {
 		if !validDomain(args[0]) || strings.TrimSpace(args[1]) == "" {
 			return errors.New("provide a workspace domain and a search query")
 		}
 		so.Domain, so.Query = strings.ToLower(args[0]), args[1]
+		if cmd.Flags().Changed("exclude-author") {
+			so.ExcludeAuthor = strings.TrimPrefix(so.ExcludeAuthor, "@")
+			if !authorHandle.MatchString(so.ExcludeAuthor) {
+				return errors.New("--exclude-author requires a Slack username such as @alice")
+			}
+		}
+		if cmd.Flags().Changed("exclude-leading-mention") {
+			so.ExcludeLeading = strings.TrimPrefix(so.ExcludeLeading, "@")
+			if !authorHandle.MatchString(so.ExcludeLeading) {
+				return errors.New("--exclude-leading-mention requires a Slack username such as @alice")
+			}
+		}
+		if cmd.Flags().Changed("exclude-url-substring") {
+			so.ExcludeURLSubstring = strings.TrimSpace(so.ExcludeURLSubstring)
+			if so.ExcludeURLSubstring == "" {
+				return errors.New("--exclude-url-substring must not be empty")
+			}
+		}
 		if !cmd.Flags().Changed("before") {
 			so.Before = contextCount
 		}
 		if !cmd.Flags().Changed("after") {
 			so.After = contextCount
 		}
-		if contextCount < 0 || contextCount > 200 || so.Before < 0 || so.Before > 200 || so.After < 0 || so.After > 200 || so.Limit < 0 {
-			return errors.New("context counts must be 0–200; the hit limit must be nonnegative")
+		if contextCount < 0 || contextCount > 200 || so.Before < 0 || so.Before > 200 || so.After < 0 || so.After > 200 || so.Limit < 0 || so.Offset < 0 {
+			return errors.New("context counts must be 0–200; the hit limit and offset must be nonnegative")
 		}
 		if err := validate(&so, sr); err != nil {
 			return err

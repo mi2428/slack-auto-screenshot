@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -25,6 +26,21 @@ import (
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/chromedp"
 )
+
+func writeTestPNG(t *testing.T, path string, width, height int) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = png.Encode(file, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestOptionsAndOutput(t *testing.T) {
 	cmd, _, err := NewCommand().Find([]string{"search"})
@@ -80,6 +96,9 @@ func TestOptionsAndOutput(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(out.Stage, "000001.png"), []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err = os.Link(filepath.Join(out.Stage, "000001.png"), filepath.Join(out.Stage, "linked.png")); err != nil {
+		t.Fatal(err)
+	}
 	out.RecordMissing("F123", MissingFile{Timestamp: "42", ID: "F123", Name: "document.md", Reason: "HTTP 403", Source: "https://files.slack.com/files-pri/T-F123/document.md"})
 	path, err := out.Finish("../engineering/review", "Channel screenshots: 1\nAttachments: 0 saved, 1 missing", true)
 	if err != nil {
@@ -92,12 +111,20 @@ func TestOptionsAndOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer archive.Close()
+	defer func() {
+		if err := archive.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	zip, err := gzip.NewReader(archive)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer zip.Close()
+	defer func() {
+		if err := zip.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	contents := map[string]string{}
 	for tr := tar.NewReader(zip); ; {
 		hdr, err := tr.Next()
@@ -116,8 +143,38 @@ func TestOptionsAndOutput(t *testing.T) {
 		}
 		contents[filepath.Base(hdr.Name)] = string(body)
 	}
-	if contents["000001.png"] != "fixture" || !strings.Contains(contents["MISSING_FILES.txt"], "Missing attachments: 1") || !strings.Contains(contents["MISSING_FILES.txt"], "F123") || !strings.Contains(contents["COMPLETE.txt"], "Captured date range:") || !strings.Contains(contents["COMPLETE.txt"], "1 missing") {
+	if contents["000001.png"] != "fixture" || contents["linked.png"] != "fixture" || !strings.Contains(contents["MISSING_FILES.txt"], "Missing attachments: 1") || !strings.Contains(contents["MISSING_FILES.txt"], "F123") || !strings.Contains(contents["COMPLETE.txt"], "Captured date range:") || !strings.Contains(contents["COMPLETE.txt"], "1 missing") {
 		t.Fatalf("archive contents: %v", contents)
+	}
+}
+
+func TestFinishKeepsStageAfterArchiveFailure(t *testing.T) {
+	out, err := NewOutput(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Dates["2026-10-02"] = true
+	if err = os.WriteFile(filepath.Join(out.Stage, "000001.png"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(out.Stage, "special")
+	if err = os.Symlink("000001.png", bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = out.Finish("fixture", "summary", true); err == nil {
+		t.Fatal("archive accepted a special file")
+	}
+	if info, statErr := os.Stat(out.Stage); statErr != nil || !info.IsDir() {
+		t.Fatalf("stage was lost after archive failure: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(out.Stage, "COMPLETE.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed output retained a completion marker: %v", statErr)
+	}
+	if err = os.Remove(bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = out.Finish("fixture", "summary", true); err != nil {
+		t.Fatalf("archive retry failed: %v", err)
 	}
 }
 
@@ -198,6 +255,37 @@ func TestWheelMovesViewportFractionAcrossScales(t *testing.T) {
 	}
 }
 
+func TestWheelWaitsForDelayedVisibleMessages(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	markup := `<style>body{margin:0}#pane{height:500px;overflow-y:auto}article{height:100px;position:sticky;top:0}#space{height:4000px}</style>` +
+		`<div id="pane"><article data-qa="message_container" data-msg-ts="1730000000.000000">Post</article><div id="space"></div></div>` +
+		`<script>pane.addEventListener('scroll',()=>{setTimeout(()=>document.querySelector('article').dataset.msgTs='1740000000.000000',150);setTimeout(()=>document.querySelector('article').dataset.msgTs='1750000000.000000',240)},{once:true})</script>`
+	if err = b.navigate("data:text/html," + url.PathEscape(markup)); err != nil {
+		t.Fatal(err)
+	}
+	pane, err := b.first("#pane", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err = b.wheel(pane, 400); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	messages, err := b.visible(pane, nil)
+	if err != nil || len(messages) != 1 || messages[0].ts != "1750000000.000000" || elapsed < 375*time.Millisecond || elapsed > 700*time.Millisecond {
+		t.Fatalf("adaptive wheel wait: elapsed=%s messages=%+v err=%v", elapsed, messages, err)
+	}
+}
+
 func TestCaptureVisibleHistory(t *testing.T) {
 	t.Chdir(t.TempDir())
 	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 2}, false)
@@ -254,7 +342,11 @@ func TestCaptureVisibleHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	image, err := png.DecodeConfig(f)
 	if err != nil {
 		t.Fatal(err)
@@ -517,6 +609,7 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 	var html strings.Builder
 	html.WriteString(`<style>body{margin:0;--sk_primary_background:26,29,33}[data-qa=slack_kit_scrollbar]{height:240px;overflow-y:auto}article{height:100px}</style>`)
 	html.WriteString(`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar">`)
+	fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Parent</article>`, old)
 	for i := range 6 {
 		fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Post`, reply+int64(i)*86400)
 		if i == 2 {
@@ -525,8 +618,8 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 		html.WriteString(`</article>`)
 	}
 	html.WriteString(`</div></div><div data-qa="threads_flexpane"><div data-qa="slack_kit_scrollbar">`)
-	fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Parent</article><article data-qa="message_container" data-msg-ts="%d">Reply</article>`, old, reply)
-	html.WriteString(`</div></div><button data-qa="c-pagination_forward_btn" disabled>Next</button>`)
+	fmt.Fprintf(&html, `<article data-qa="message_container" data-msg-ts="%d">Parent</article><article data-qa="message_container" data-msg-ts="%d">Reply</article><article data-qa="message_container" data-msg-ts="%d">Second reply</article>`, old, reply, reply+86400)
+	html.WriteString(`</div></div>`)
 	if err = b.navigate("data:text/html," + url.PathEscape(html.String())); err != nil {
 		t.Fatal(err)
 	}
@@ -560,8 +653,27 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = b.captureContext(fmt.Sprint(reply+2*86400), filepath.Join(out.Stage, "search"), Options{Before: 1, After: 1}, out); err != nil {
+	channelHit := fmt.Sprint(reply + 2*86400)
+	if err = b.captureContext(channelHit, channelHit, filepath.Join(out.Stage, "search"), Options{Before: 1, After: 1}, out, false, nil); err != nil {
 		t.Fatal(err)
+	}
+	nextChannelHit := fmt.Sprint(reply + 3*86400)
+	if err = b.captureContext(nextChannelHit, nextChannelHit, filepath.Join(out.Stage, "channel-reused"), Options{Before: 1, After: 1}, out, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.captureContext(fmt.Sprint(reply), fmt.Sprint(old), filepath.Join(out.Stage, "split"), Options{}, out, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.captureContext(fmt.Sprint(reply+86400), fmt.Sprint(old), filepath.Join(out.Stage, "reused"), Options{}, out, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	broadcast := `<style>body{margin:0}[data-qa=slack_kit_scrollbar]{height:240px;overflow-y:auto}article{height:100px}</style>` +
+		`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><article data-qa="message_container" data-msg-ts="` + fmt.Sprint(reply) + `">Broadcast reply</article></div></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(broadcast)); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.captureContext(fmt.Sprint(reply), fmt.Sprint(old), filepath.Join(out.Stage, "broadcast"), Options{}, out, false, nil); err == nil || !strings.Contains(err.Error(), "thread pane") {
+		t.Fatalf("broadcast reply was accepted outside the thread pane: %v", err)
 	}
 	if len(out.Missing) != 2 {
 		t.Fatalf("lost attachments: %+v", out.Missing)
@@ -572,9 +684,6 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 	report, err := os.ReadFile(filepath.Join(out.Stage, "MISSING_FILES.txt"))
 	if err != nil || !strings.Contains(string(report), "FABC") || !strings.Contains(string(report), "notes.md") || strings.Contains(string(report), "secret=") {
 		t.Fatalf("missing report: %s %v", report, err)
-	}
-	if ok, err := b.nextPage(""); err != nil || ok {
-		t.Fatalf("disabled next page: %v %v", ok, err)
 	}
 	items, err := os.ReadDir(filepath.Join(out.Stage, "search"))
 	if err != nil || len(items) == 0 {
@@ -611,6 +720,242 @@ func TestWaitThreadClosedAfterReplacement(t *testing.T) {
 	}
 	if err = b.waitThreadClosed(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClickIDDoesNotHitOverlay(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	markup := `<style>button{position:fixed;inset:100px auto auto 100px;width:200px;height:100px}#overlay{z-index:1}</style>` +
+		`<button id="target" onclick="window.targetClicks=(window.targetClicks||0)+1">Target</button>` +
+		`<button id="overlay" onclick="window.overlayClicks=(window.overlayClicks||0)+1">Overlay</button>`
+	if err = b.navigate("data:text/html," + url.PathEscape(markup)); err != nil {
+		t.Fatal(err)
+	}
+	target, err := b.first("#target", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.clickID(target); err != nil {
+		t.Fatal(err)
+	}
+	clicks, err := chromedp.Run(b.ctx, chromedp.Evaluate[struct{ Target, Overlay int }](`({Target:window.targetClicks||0,Overlay:window.overlayClicks||0})`))
+	if err != nil || clicks.Target != 1 || clicks.Overlay != 0 {
+		t.Fatalf("clicks = %+v: %v", clicks, err)
+	}
+}
+
+func TestSlackAPIInventory(t *testing.T) {
+	searchCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/auth.test":
+			_, _ = io.WriteString(w, `{"ok":true,"url":"https://yourorg.slack.com/","user":"alice","user_id":"U1"}`)
+		case "/search.messages":
+			searchCalls++
+			if r.URL.Query().Get("query") != `keyword -from:<@U1>` || r.URL.Query().Get("count") != "100" {
+				http.Error(w, "bad query", http.StatusBadRequest)
+				return
+			}
+			if r.URL.Query().Get("page") == "1" {
+				_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1730000000000000","text":"<@U1> direct","ts":"1730000000.000000","user":"U2"}],"total":2,"pagination":{"page_count":2,"total_count":2}}}`)
+			} else {
+				_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1740000000000000?thread_ts=1735000000.000000&cid=C123","text":"indirect keyword","ts":"1740000000.000000","user":"U2"}],"total":2,"pagination":{"page_count":2,"total_count":2}}}`)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
+	hits, total, leadingExcluded, urlExcluded, err := inventory(context.Background(), Options{Domain: "yourorg.slack.com", Query: "keyword", ExcludeAuthor: "alice", ExcludeLeading: "alice"}, api)
+	if err != nil || total != 2 || leadingExcluded != 1 || urlExcluded != 0 || len(hits) != 1 || hits[0].TS != "1740000000.000000" || hits[0].Parent != "1735000000.000000" || searchCalls != 2 {
+		t.Fatalf("inventory = %+v, total=%d leading=%d URLs=%d calls=%d: %v", hits, total, leadingExcluded, urlExcluded, searchCalls, err)
+	}
+}
+
+func TestSlackAPIFailsOnCollapsedResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1730000000000000","ts":"1730000000.000000"}],"total":2,"pagination":{"page_count":1,"total_count":2}}}`)
+	}))
+	defer server.Close()
+	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
+	_, _, err := api.search(context.Background(), "keyword")
+	if err == nil || !strings.Contains(err.Error(), "reported 2 hits but returned 1") {
+		t.Fatalf("collapsed search error = %v", err)
+	}
+}
+
+func TestSearchResumeStateAndThreadGrouping(t *testing.T) {
+	root := t.TempDir()
+	o := Options{Domain: "yourorg.slack.com", Query: "keyword before:2026-10-16", Output: root, Width: 1, Height: 1, OutputWidth: 1, Scale: 1, Before: 5, After: 20}
+	permalinks := []string{
+		"https://yourorg.slack.com/archives/C123/p1740000000000000?thread_ts=1735000000.000000&cid=C123",
+		"https://yourorg.slack.com/archives/C456/p1730000000000000",
+		"https://yourorg.slack.com/archives/C789/p1750000000000000?thread_ts=1725000000.000000&cid=C789",
+		"https://yourorg.slack.com/archives/C123/p1741000000000000?thread_ts=1735000000.000000&cid=C123",
+		"https://yourorg.slack.com/archives/C456/p1760000000000000",
+	}
+	var hits []hit
+	for _, permalink := range permalinks {
+		h, err := parseHit(permalink, o.Domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hits = append(hits, h)
+	}
+	grouped, samePane, reused := groupSearchHits(hits)
+	if samePane != 2 || reused != 1 || grouped[0].Parent != grouped[1].Parent || grouped[0].Channel != grouped[1].Channel || grouped[2].Channel != grouped[3].Channel {
+		t.Fatalf("thread grouping = %+v, same pane %d, reused %d", grouped, samePane, reused)
+	}
+	coverage := map[string]bool{"1739000000.000000": true, grouped[0].TS: true, "1742000000.000000": true}
+	if !contextCovers(coverage, grouped[0], 1, 1) || contextCovers(coverage, grouped[0], 2, 1) {
+		t.Fatalf("context coverage mismatch: %+v", coverage)
+	}
+	source, target := filepath.Join(root, "source"), filepath.Join(root, "target")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "000001.png"), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkSearchScreens(source, target); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Stat(filepath.Join(source, "000001.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := os.Stat(filepath.Join(target, "000001.png"))
+	if err != nil || !os.SameFile(original, linked) {
+		t.Fatalf("search screens were not hard-linked: %v", err)
+	}
+	out, err := NewOutput(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Dates["2026-10-02"] = true
+	out.Saved["FABC"] = true
+	state := &searchState{
+		Version: searchStateVersion, Spec: searchOptions(o), Stage: out.Stage, Total: 10, Targets: 5, ThreadReplies: 3,
+		Hits: grouped, Completed: map[string]bool{grouped[0].Key: true}, Dates: out.Dates, Saved: out.Saved, Missing: out.Missing,
+	}
+	path, err := searchStatePath(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = saveSearchState(path, state, out); err != nil {
+		t.Fatal(err)
+	}
+	completed := filepath.Join(out.Stage, grouped[0].Key)
+	if err = os.Mkdir(completed, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestPNG(t, filepath.Join(completed, "000001.png"), 1, 1)
+	if err = os.WriteFile(filepath.Join(out.Stage, "file_FABC_saved.txt"), []byte("saved"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(out.Stage, "file_FEXTRA_notes.txt"), []byte("saved"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, resumed, found, err := loadSearchState(path, o)
+	if err != nil || !found || loaded.Stage != out.Stage || len(loaded.Completed) != 1 || !loaded.Dates["2026-10-02"] || !loaded.Saved["FABC"] || !loaded.Saved["FEXTRA"] || resumed.Stage != out.Stage {
+		t.Fatalf("resume state = %+v, output = %+v, found=%v: %v", loaded, resumed, found, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || bytes.Contains(data, []byte("https://")) {
+		t.Fatalf("resume state retained a private permalink: %v", err)
+	}
+	if err = os.Remove(filepath.Join(completed, "000001.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = loadSearchState(path, o); err == nil || !strings.Contains(err.Error(), "no screenshots") {
+		t.Fatalf("resume accepted a completed hit without PNGs: %v", err)
+	}
+	changed := o
+	changed.After++
+	changedPath, err := searchStatePath(changed)
+	if err != nil || changedPath == path {
+		t.Fatalf("changed search reused state path: %q %q %v", path, changedPath, err)
+	}
+}
+
+func TestFailedSearchAttemptRollsBackOutput(t *testing.T) {
+	out, err := NewOutput(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Dates["2026-10-01"] = true
+	out.Saved["FOLD"] = true
+	before := snapshotSearchAttempt(out)
+	out.Dates["2026-10-02"] = true
+	out.Saved["FNEW"] = true
+	out.Missing["missing"] = MissingFile{Reason: "fixture"}
+	if err = os.WriteFile(filepath.Join(out.Stage, "file_FNEW_notes.txt"), []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(out.Stage, "hit")
+	if err = os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = rollbackSearchAttempt(out, before, directory); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Dates) != 1 || !out.Dates["2026-10-01"] || len(out.Saved) != 1 || !out.Saved["FOLD"] || len(out.Missing) != 0 {
+		t.Fatalf("failed attempt state remained: dates=%v saved=%v missing=%v", out.Dates, out.Saved, out.Missing)
+	}
+	if _, err = os.Stat(filepath.Join(out.Stage, "file_FNEW_notes.txt")); !os.IsNotExist(err) {
+		t.Fatalf("failed attempt attachment remained: %v", err)
+	}
+	if _, err = os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("failed attempt screenshots remained: %v", err)
+	}
+}
+
+func TestSearchAPIFilters(t *testing.T) {
+	search, _, err := NewCommand().Find([]string{"search"})
+	if err != nil || search.Flags().Lookup("exclude-author") == nil || search.Flags().Lookup("exclude-leading-mention") == nil || search.Flags().Lookup("exclude-bots") != nil {
+		t.Fatalf("search API flags invalid: %v", err)
+	}
+	if got := keychainArgs("yourorg.slack.com"); strings.Join(got, " ") != "find-internet-password -l slack-auto-screenshot-user-token -s yourorg.slack.com -w" {
+		t.Fatalf("keychain args = %q", got)
+	}
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"<@U1> hello", true},
+		{"  <@U1|alice> hello", true},
+		{"hello <@U1>", false},
+		{"<@U10> hello", false},
+	} {
+		if got := startsWithUserMention(tc.text, "U1"); got != tc.want {
+			t.Errorf("startsWithUserMention(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"https://status.example.com/service2/1", true},
+		{"<https://status.example.com/service2/1|dashboard>", true},
+		{"service2 is down: https://status.example.com/service", false},
+		{"<https://status.example.com/service|service2 dashboard>", false},
+		{"service2 without a link", false},
+		{"https://status.example.com/service/1", false},
+		{"no keyword and no link", false},
+	} {
+		if got := keywordOnlyInURL(tc.text, "service2"); got != tc.want {
+			t.Errorf("keywordOnlyInURL(%q) = %v, want %v", tc.text, got, tc.want)
+		}
 	}
 }
 
