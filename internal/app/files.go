@@ -133,7 +133,7 @@ func (b *Browser) download(out *Output, ts, name, href string) error {
 		missing("network request failed")
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") && !strings.HasSuffix(strings.ToLower(filename), ".html") {
 		missing(fmt.Sprintf("download failed (HTTP %d)", resp.StatusCode))
 		return nil
@@ -143,7 +143,7 @@ func (b *Browser) download(out *Output, ts, name, href string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	guard := &fileWriter{file: tmp}
 	if _, err = io.Copy(guard, resp.Body); err != nil {
 		_ = tmp.Close()
