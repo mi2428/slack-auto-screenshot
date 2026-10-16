@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -252,6 +253,27 @@ func TestWheelMovesViewportFractionAcrossScales(t *testing.T) {
 				top = after
 			}
 		})
+	}
+}
+
+func TestAuthHasDeadline(t *testing.T) {
+	t.Chdir(t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "<html></html>")
+	}))
+	defer server.Close()
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.navigate(server.URL); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err = b.authWithin(server.URL, "", 50*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("auth deadline: elapsed=%s err=%v", time.Since(started), err)
 	}
 }
 

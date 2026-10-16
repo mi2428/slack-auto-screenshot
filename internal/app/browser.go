@@ -418,21 +418,31 @@ func (b *Browser) workspace(domain string) (string, error) {
 }
 
 func (b *Browser) auth(workspace, domain string) error {
-	for range 120 {
-		loc, err := b.location()
-		if err != nil {
-			return err
+	return b.authWithin(workspace, domain, 90*time.Second)
+}
+
+func (b *Browser) authWithin(workspace, domain string, timeout time.Duration) error {
+	return b.within(timeout, func() error {
+		for range 120 {
+			loc, err := b.location()
+			if err != nil {
+				return err
+			}
+			if !strings.HasPrefix(loc, workspace+"/") && loc != workspace {
+				break
+			}
+			if nodes, _ := b.nodes(slackAppReady, 0); len(nodes) > 0 {
+				return nil
+			}
+			select {
+			case <-b.ctx.Done():
+				return b.ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
-		if !strings.HasPrefix(loc, workspace+"/") && loc != workspace {
-			break
+		if domain == "" {
+			domain = "<workspace-domain>"
 		}
-		if nodes, _ := b.nodes(slackAppReady, 0); len(nodes) > 0 {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if domain == "" {
-		domain = "<workspace-domain>"
-	}
-	return fmt.Errorf("authentication required; run slack-auto-screenshot login %s", domain)
+		return fmt.Errorf("authentication required; run slack-auto-screenshot login %s", domain)
+	})
 }

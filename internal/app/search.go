@@ -859,10 +859,15 @@ func (b *Browser) captureSearchHit(workspace string, h hit, index, total int, o 
 			_ = b.navigate("about:blank")
 		} else {
 			if err := b.auth(workspace, o.Domain); err != nil {
-				return nil, err
+				if !errors.Is(err, context.DeadlineExceeded) {
+					return nil, err
+				}
+				captureErr = fmt.Errorf("wait for search page readiness: %w", err)
 			}
-			fmt.Println("Search hit page opened")
-			if h.Parent == h.TS {
+			if captureErr == nil {
+				fmt.Println("Search hit page opened")
+			}
+			if captureErr == nil && h.Parent == h.TS {
 				prepareStarted := time.Now()
 				captureErr = b.prepareChannelHit(h.TS)
 				fmt.Printf("Search channel preparation: %d ms\n", time.Since(prepareStarted).Milliseconds())
