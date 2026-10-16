@@ -49,6 +49,7 @@ type searchSpec struct {
 	Theme                                                             string
 	Width, Height, OutputWidth, Before, After, Limit, Offset          int
 	Scale                                                             float64
+	OldestFirst                                                       bool
 }
 
 type searchState struct {
@@ -202,7 +203,7 @@ func searchPages(r slackSearchResponse, total int) int {
 	return (total + 99) / 100
 }
 
-func (a slackAPI) search(ctx context.Context, query string) ([]slackMatch, int, error) {
+func (a slackAPI) search(ctx context.Context, query string, oldestFirst bool) ([]slackMatch, int, error) {
 	seen := map[string]bool{}
 	var matches []slackMatch
 	total, pages := -1, 1
@@ -210,12 +211,16 @@ func (a slackAPI) search(ctx context.Context, query string) ([]slackMatch, int, 
 		if pageNo > 100 {
 			return nil, 0, errors.New("slack search exceeds the 10,000-result API limit")
 		}
+		sortDirection := "desc"
+		if oldestFirst {
+			sortDirection = "asc"
+		}
 		params := url.Values{
 			"query":    {query},
 			"count":    {"100"},
 			"page":     {strconv.Itoa(pageNo)},
 			"sort":     {"timestamp"},
-			"sort_dir": {"desc"},
+			"sort_dir": {sortDirection},
 		}
 		var response slackSearchResponse
 		if err := a.get(ctx, "search.messages", params, &response); err != nil {
@@ -326,7 +331,7 @@ func inventory(ctx context.Context, o Options, api slackAPI) ([]hit, int, int, i
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
-	matches, total, err := api.search(ctx, query)
+	matches, total, err := api.search(ctx, query, o.OldestFirst)
 	if err != nil {
 		return nil, total, 0, 0, err
 	}
@@ -358,6 +363,7 @@ func searchOptions(o Options) searchSpec {
 		Domain: o.Domain, Query: o.Query, ExcludeAuthor: o.ExcludeAuthor, ExcludeLeading: o.ExcludeLeading,
 		ExcludeURLSubstring: o.ExcludeURLSubstring, Theme: o.Theme, Width: o.Width, Height: o.Height,
 		OutputWidth: o.OutputWidth, Before: o.Before, After: o.After, Limit: o.Limit, Offset: o.Offset, Scale: o.Scale,
+		OldestFirst: o.OldestFirst,
 	}
 }
 
@@ -639,7 +645,9 @@ func runSearch(o Options) error {
 			fmt.Println("No search hits matched the capture filters")
 			return nil
 		}
-		hits, _, _ = groupSearchHits(hits)
+		if !o.OldestFirst {
+			hits, _, _ = groupSearchHits(hits)
+		}
 		out, err = NewOutput(o.Output)
 		if err != nil {
 			return err

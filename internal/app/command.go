@@ -21,7 +21,7 @@ type Options struct {
 	Width, Height, OutputWidth     int
 	Scale                          float64
 	Before, After, Limit, Offset   int
-	Gzip                           bool
+	Gzip, OldestFirst              bool
 }
 
 var domainPattern = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.slack\.com$`)
@@ -92,6 +92,7 @@ func NewCommand() *cobra.Command {
 	search.Flags().IntVarP(&so.After, "after", "A", 20, "Number of messages after a hit")
 	search.Flags().IntVar(&so.Limit, "limit", 0, "Maximum number of search hits (default: all)")
 	search.Flags().IntVar(&so.Offset, "offset", 0, "Skip the first N filtered search hits")
+	search.Flags().BoolVar(&so.OldestFirst, "oldest-first", false, "Capture the oldest filtered hits first")
 	search.Flags().StringVar(&so.ExcludeAuthor, "exclude-author", "", "Exclude posts by a Slack username (@name)")
 	search.Flags().StringVar(&so.ExcludeLeading, "exclude-leading-mention", "", "Exclude posts whose text starts with @name")
 	search.Flags().StringVar(&so.ExcludeURLSubstring, "exclude-url-substring", "", "Exclude hits where this text occurs only inside URLs")

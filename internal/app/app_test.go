@@ -761,7 +761,7 @@ func TestSlackAPIInventory(t *testing.T) {
 			_, _ = io.WriteString(w, `{"ok":true,"url":"https://yourorg.slack.com/","user":"alice","user_id":"U1"}`)
 		case "/search.messages":
 			searchCalls++
-			if r.URL.Query().Get("query") != `keyword -from:<@U1>` || r.URL.Query().Get("count") != "100" {
+			if r.URL.Query().Get("query") != `keyword -from:<@U1>` || r.URL.Query().Get("count") != "100" || r.URL.Query().Get("sort_dir") != "asc" {
 				http.Error(w, "bad query", http.StatusBadRequest)
 				return
 			}
@@ -776,7 +776,7 @@ func TestSlackAPIInventory(t *testing.T) {
 	}))
 	defer server.Close()
 	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
-	hits, total, leadingExcluded, urlExcluded, err := inventory(context.Background(), Options{Domain: "yourorg.slack.com", Query: "keyword", ExcludeAuthor: "alice", ExcludeLeading: "alice"}, api)
+	hits, total, leadingExcluded, urlExcluded, err := inventory(context.Background(), Options{Domain: "yourorg.slack.com", Query: "keyword", ExcludeAuthor: "alice", ExcludeLeading: "alice", OldestFirst: true}, api)
 	if err != nil || total != 2 || leadingExcluded != 1 || urlExcluded != 0 || len(hits) != 1 || hits[0].TS != "1740000000.000000" || hits[0].Parent != "1735000000.000000" || searchCalls != 2 {
 		t.Fatalf("inventory = %+v, total=%d leading=%d URLs=%d calls=%d: %v", hits, total, leadingExcluded, urlExcluded, searchCalls, err)
 	}
@@ -788,7 +788,7 @@ func TestSlackAPIFailsOnCollapsedResults(t *testing.T) {
 	}))
 	defer server.Close()
 	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
-	_, _, err := api.search(context.Background(), "keyword")
+	_, _, err := api.search(context.Background(), "keyword", false)
 	if err == nil || !strings.Contains(err.Error(), "reported 2 hits but returned 1") {
 		t.Fatalf("collapsed search error = %v", err)
 	}
@@ -886,6 +886,12 @@ func TestSearchResumeStateAndThreadGrouping(t *testing.T) {
 	if err != nil || changedPath == path {
 		t.Fatalf("changed search reused state path: %q %q %v", path, changedPath, err)
 	}
+	changed = o
+	changed.OldestFirst = true
+	changedPath, err = searchStatePath(changed)
+	if err != nil || changedPath == path {
+		t.Fatalf("oldest-first search reused state path: %q %q %v", path, changedPath, err)
+	}
 }
 
 func TestFailedSearchAttemptRollsBackOutput(t *testing.T) {
@@ -922,7 +928,7 @@ func TestFailedSearchAttemptRollsBackOutput(t *testing.T) {
 
 func TestSearchAPIFilters(t *testing.T) {
 	search, _, err := NewCommand().Find([]string{"search"})
-	if err != nil || search.Flags().Lookup("exclude-author") == nil || search.Flags().Lookup("exclude-leading-mention") == nil || search.Flags().Lookup("exclude-bots") != nil {
+	if err != nil || search.Flags().Lookup("exclude-author") == nil || search.Flags().Lookup("exclude-leading-mention") == nil || search.Flags().Lookup("oldest-first") == nil || search.Flags().Lookup("exclude-bots") != nil {
 		t.Fatalf("search API flags invalid: %v", err)
 	}
 	if got := keychainArgs("yourorg.slack.com"); strings.Join(got, " ") != "find-internet-password -l slack-auto-screenshot-user-token -s yourorg.slack.com -w" {

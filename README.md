@@ -58,6 +58,7 @@ Flags:
       --gzip                  Archive the folder as tar.gz while retaining PNGs
   -h, --help                  help for search
       --limit int             Maximum number of search hits (default: all)
+      --oldest-first          Capture the oldest filtered hits first
       --offset int            Skip the first N filtered search hits
       --output string         Parent output directory (default "captures")
       --output-width int      Output PNG width in pixels (0: native resolution) (default 1440)
