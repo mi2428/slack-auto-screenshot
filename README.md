@@ -8,10 +8,8 @@ A Go CLI that saves PNG screenshots of Slack as rendered in Chrome. Keyword sear
 
 Run `make build`, then use `login` to sign in manually through a dedicated Chrome profile.
 
-Search also requires a Slack user token with `search:read`, stored as a macOS
-Internet Password named `slack-auto-screenshot-user-token`. Its Website must be
-the workspace domain, such as `yourorg.slack.com`; search accepts no token flag,
-environment variable, or config file.
+Search also requires a Slack user token with `search:read`, stored as a macOS Internet Password named `slack-auto-screenshot-user-token`.
+Its Website must be the workspace domain, such as `yourorg.slack.com`; search accepts no token flag, environment variable, or config file.
 
 ## Usage
 
@@ -67,17 +65,13 @@ Flags:
       --width int             Viewport width in CSS pixels (default 1440)
 ```
 
-For example, `search yourorg.slack.com 'incident' --exclude-author @alice --exclude-leading-mention @alice`
-uses the authenticated user's ID for both exclusions. Slack applies that
-user's search filters, including its bot-message preference, to API results.
-The CLI refuses to capture when the API total and returned unique messages do
-not agree.
+For example, `search yourorg.slack.com 'incident' --exclude-author @alice --exclude-leading-mention @alice` uses the authenticated user's ID for both exclusions.
+Slack applies that user's search filters, including its bot-message preference, to API results.
+The CLI refuses to capture when the API total and returned unique messages do not agree.
 
-An interrupted search resumes when the same command and output directory are
-used again. The saved inventory is reused, completed hits are skipped, and
-only remaining hits are retried. Run one search command for the full result
-set instead of wrapping it in external `--offset`/`--limit` chunks; hits from
-the same thread are grouped so its open Slack view can be reused.
+An interrupted search resumes when the same command and output directory are used again.
+The saved inventory is reused, completed hits are skipped, and only remaining hits are retried.
+Run one search command for the full result set instead of wrapping it in external `--offset`/`--limit` chunks; hits from the same thread are grouped so its open Slack view can be reused.
 
 ## License
 
