@@ -66,6 +66,13 @@ func TestOptionsAndOutput(t *testing.T) {
 	if before != 2 || after != 7 || contextCount != 5 {
 		t.Fatalf("search flags: %d/%d/%d", before, after, contextCount)
 	}
+	if err = cmd.ParseFlags([]string{"yourorg.slack.com", "query", "--channel-messages-only"}); err != nil {
+		t.Fatal(err)
+	}
+	channelMessagesOnly, _ := cmd.Flags().GetBool("channel-messages-only")
+	if !channelMessagesOnly {
+		t.Fatal("--channel-messages-only was not enabled")
+	}
 	for _, domain := range []string{"https://yourorg.slack.com", "app.slack.com", "evil.slack.com.example.org", "yourorg.slack.com/path"} {
 		if validDomain(domain) {
 			t.Fatalf("unsafe domain accepted: %q", domain)
@@ -945,6 +952,25 @@ func TestSearchResumeStateAndThreadGrouping(t *testing.T) {
 	changedPath, err = searchStatePath(changed)
 	if err != nil || changedPath == path {
 		t.Fatalf("oldest-first search reused state path: %q %q %v", path, changedPath, err)
+	}
+}
+
+func TestSearchHitWorklistChannelMessagesOnly(t *testing.T) {
+	hits := []hit{
+		{TS: "1", Parent: "1", Key: "channel-complete"},
+		{TS: "2", Parent: "1", Key: "thread-reply"},
+		{TS: "3", Parent: "3", Key: "channel-pending"},
+	}
+	completed := map[string]bool{"channel-complete": true}
+
+	pending, remaining := searchHitWorklist(hits, completed, true)
+	if len(pending) != 1 || pending[0] != 2 || remaining != 2 {
+		t.Fatalf("channel-only worklist = %v, remaining %d; want [2], 2", pending, remaining)
+	}
+
+	pending, remaining = searchHitWorklist(hits, completed, false)
+	if len(pending) != 2 || pending[0] != 1 || pending[1] != 2 || remaining != 2 {
+		t.Fatalf("full worklist = %v, remaining %d; want [1 2], 2", pending, remaining)
 	}
 }
 

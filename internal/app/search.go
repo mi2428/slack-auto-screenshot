@@ -719,13 +719,23 @@ func runSearch(o Options) error {
 	return nil
 }
 
-func (b *Browser) captureSearchHits(workspace string, o Options, out *Output, state *searchState, statePath string) (int, error) {
+func searchHitWorklist(hits []hit, completed map[string]bool, channelMessagesOnly bool) ([]int, int) {
 	var pending []int
-	for i, h := range state.Hits {
-		if !state.Completed[h.Key] {
+	remaining := 0
+	for i, h := range hits {
+		if completed[h.Key] {
+			continue
+		}
+		remaining++
+		if !channelMessagesOnly || h.Parent == h.TS {
 			pending = append(pending, i)
 		}
 	}
+	return pending, remaining
+}
+
+func (b *Browser) captureSearchHits(workspace string, o Options, out *Output, state *searchState, statePath string) (int, error) {
+	pending, _ := searchHitWorklist(state.Hits, state.Completed, o.ChannelMessagesOnly)
 	contexts := map[string][]capturedSearchContext{}
 	run := func(items []int, firstAttempt, lastAttempt int) ([]int, error) {
 		var failed []int
@@ -784,7 +794,8 @@ func (b *Browser) captureSearchHits(workspace string, o Options, out *Output, st
 	for _, i := range failed {
 		fmt.Fprintf(os.Stderr, "WARNING: Search hit %d/%d remains incomplete\n", i+1, len(state.Hits))
 	}
-	return len(failed), saveSearchState(statePath, state, out)
+	_, remaining := searchHitWorklist(state.Hits, state.Completed, false)
+	return remaining, saveSearchState(statePath, state, out)
 }
 
 type searchAttemptState struct {
