@@ -144,22 +144,43 @@ func (a slackAPI) authenticate(ctx context.Context, domain string) (slackAuth, e
 	return auth, nil
 }
 
-func searchTotal(r slackSearchResponse) int {
-	for _, total := range []int{r.Messages.Total, r.Messages.Pagination.TotalCount, r.Messages.Paging.Total} {
-		if total > 0 {
-			return total
+func searchTotal(r slackSearchResponse) (int, error) {
+	total := 0
+	for _, value := range []int{r.Messages.Total, r.Messages.Pagination.TotalCount, r.Messages.Paging.Total} {
+		if value < 0 {
+			return 0, errors.New("slack search returned a negative total")
 		}
+		if value == 0 {
+			continue
+		}
+		if total != 0 && value != total {
+			return 0, errors.New("slack search returned inconsistent totals")
+		}
+		total = value
 	}
-	return 0
+	return total, nil
 }
 
-func searchPages(r slackSearchResponse, total int) int {
-	for _, pages := range []int{r.Messages.Pagination.PageCount, r.Messages.Paging.Pages} {
-		if pages > 0 {
-			return pages
+func searchPages(r slackSearchResponse, total int) (int, error) {
+	pages := 0
+	for _, value := range []int{r.Messages.Pagination.PageCount, r.Messages.Paging.Pages} {
+		if value < 0 {
+			return 0, errors.New("slack search returned a negative page count")
 		}
+		if value == 0 {
+			continue
+		}
+		if pages != 0 && value != pages {
+			return 0, errors.New("slack search returned inconsistent page counts")
+		}
+		pages = value
 	}
-	return (total + 99) / 100
+	if pages == 0 {
+		pages = (total + 99) / 100
+	} else if total > 0 && pages != (total+99)/100 {
+		return 0, errors.New("slack search page count does not match its total")
+	}
+	return pages, nil
 }
 
 func (a slackAPI) search(ctx context.Context, query string, oldestFirst bool) ([]slackMatch, int, error) {
@@ -188,15 +209,24 @@ func (a slackAPI) search(ctx context.Context, query string, oldestFirst bool) ([
 		if !response.OK {
 			return nil, 0, fmt.Errorf("slack search.messages: %s", response.Error)
 		}
-		currentTotal := searchTotal(response)
+		currentTotal, err := searchTotal(response)
+		if err != nil {
+			return nil, 0, err
+		}
+		currentPages, err := searchPages(response, currentTotal)
+		if err != nil {
+			return nil, 0, err
+		}
 		if total < 0 {
 			total = currentTotal
-			pages = searchPages(response, total)
+			pages = currentPages
 			if pages > 100 {
 				return nil, 0, errors.New("slack search exceeds the 10,000-result API limit")
 			}
 		} else if currentTotal != total {
 			return nil, 0, errors.New("slack search total changed during pagination")
+		} else if currentPages != pages {
+			return nil, 0, errors.New("slack search page count changed during pagination")
 		}
 		for _, match := range response.Messages.Matches {
 			key := match.Permalink

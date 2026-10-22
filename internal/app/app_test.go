@@ -852,6 +852,29 @@ func TestClickIDDoesNotHitOverlay(t *testing.T) {
 
 func TestSlackAPIInventory(t *testing.T) {
 	searchCalls := 0
+	firstPage := []slackMatch{{
+		Permalink: "https://yourorg.slack.com/archives/C123/p1730000000000000",
+		Text:      "<@U1> direct",
+		TS:        "1730000000.000000",
+		User:      "U2",
+	}}
+	for i := 1; i < 100; i++ {
+		ts := fmt.Sprintf("%d.%06d", 1730000000+i, 0)
+		firstPage = append(firstPage, slackMatch{
+			Permalink: "https://yourorg.slack.com/archives/C123/p" + strings.ReplaceAll(ts, ".", ""),
+			Text:      "keyword",
+			TS:        ts,
+			User:      "U2",
+		})
+	}
+	writePage := func(w io.Writer, matches []slackMatch) {
+		response := slackSearchResponse{OK: true}
+		response.Messages.Matches = matches
+		response.Messages.Total = 101
+		response.Messages.Pagination.PageCount = 2
+		response.Messages.Pagination.TotalCount = 101
+		_ = json.NewEncoder(w).Encode(response)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -867,9 +890,14 @@ func TestSlackAPIInventory(t *testing.T) {
 				return
 			}
 			if r.URL.Query().Get("page") == "1" {
-				_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1730000000000000","text":"<@U1> direct","ts":"1730000000.000000","user":"U2"}],"total":2,"pagination":{"page_count":2,"total_count":2}}}`)
+				writePage(w, firstPage)
 			} else {
-				_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1740000000000000?thread_ts=1735000000.000000&cid=C123","text":"indirect keyword","ts":"1740000000.000000","user":"U2"}],"total":2,"pagination":{"page_count":2,"total_count":2}}}`)
+				writePage(w, []slackMatch{{
+					Permalink: "https://yourorg.slack.com/archives/C123/p1740000000000000?thread_ts=1735000000.000000&cid=C123",
+					Text:      "indirect keyword",
+					TS:        "1740000000.000000",
+					User:      "U2",
+				}})
 			}
 		default:
 			http.NotFound(w, r)
@@ -878,7 +906,7 @@ func TestSlackAPIInventory(t *testing.T) {
 	defer server.Close()
 	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
 	hits, total, leadingExcluded, urlExcluded, err := inventory(context.Background(), Options{Domain: "yourorg.slack.com", Query: "keyword", ExcludeAuthor: "alice", ExcludeLeading: "alice", OldestFirst: true}, api)
-	if err != nil || total != 2 || leadingExcluded != 1 || urlExcluded != 0 || len(hits) != 1 || hits[0].TS != "1740000000.000000" || hits[0].Parent != "1735000000.000000" || searchCalls != 2 {
+	if err != nil || total != 101 || leadingExcluded != 1 || urlExcluded != 0 || len(hits) != 100 || hits[99].TS != "1740000000.000000" || hits[99].Parent != "1735000000.000000" || searchCalls != 2 {
 		t.Fatalf("inventory = %+v, total=%d leading=%d URLs=%d calls=%d: %v", hits, total, leadingExcluded, urlExcluded, searchCalls, err)
 	}
 }
@@ -904,6 +932,24 @@ func TestSlackAPIFailsOnCollapsedResults(t *testing.T) {
 	_, _, err := api.search(context.Background(), "keyword", false)
 	if err == nil || !strings.Contains(err.Error(), "reported 2 hits but returned 1") {
 		t.Fatalf("collapsed search error = %v", err)
+	}
+}
+
+func TestSlackAPIFailsOnInconsistentSearchMetadata(t *testing.T) {
+	for _, body := range []string{
+		`{"ok":true,"messages":{"matches":[],"total":1,"pagination":{"page_count":1,"total_count":2}}}`,
+		`{"ok":true,"messages":{"matches":[],"total":1,"pagination":{"page_count":2,"total_count":1}}}`,
+		`{"ok":true,"messages":{"matches":[],"total":1,"pagination":{"page_count":1,"total_count":1},"paging":{"pages":2,"total":1}}}`,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, body)
+		}))
+		api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
+		if _, _, err := api.search(context.Background(), "keyword", false); err == nil {
+			server.Close()
+			t.Fatalf("inconsistent search metadata was accepted: %s", body)
+		}
+		server.Close()
 	}
 }
 
