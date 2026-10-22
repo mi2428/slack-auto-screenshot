@@ -49,6 +49,7 @@ Flags:
   -A, --after int             Number of messages after a hit (default 20)
       --aspect-ratio string   Viewport aspect ratio at the selected CSS-pixel width (default "9:16")
   -B, --before int            Number of messages before a hit (default 20)
+      --channel-messages-only Retry only incomplete top-level channel messages
   -C, --context int           Default number of messages before and after a hit (default 20)
       --exclude-author string Exclude posts by a Slack username (@name)
       --exclude-leading-mention string Exclude posts whose text starts with @name
@@ -64,6 +65,8 @@ Flags:
       --theme string          Capture-page theme: light or dark
       --width int             Viewport width in CSS pixels (default 1440)
 ```
+
+Use `--channel-messages-only` only to resume an incomplete search; thread replies remain pending and prevent finalization.
 
 For example, `search yourorg.slack.com 'incident' --exclude-author @alice --exclude-leading-mention @alice` uses the authenticated user's ID for both exclusions.
 Slack applies that user's search filters, including its bot-message preference, to API results.
