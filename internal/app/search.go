@@ -22,6 +22,8 @@ import (
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -949,6 +951,10 @@ func (b *Browser) targetPane(ts string) (cdp.NodeID, cdp.NodeID, bool, error) {
 }
 
 func (b *Browser) positionMainParent(parent string) (cdp.NodeID, error) {
+	return b.positionMainParentWithin(parent, 200)
+}
+
+func (b *Browser) positionMainParentWithin(parent string, limit int) (cdp.NodeID, error) {
 	pane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
 	if err != nil {
 		return 0, err
@@ -963,7 +969,7 @@ func (b *Browser) positionMainParent(parent string) (cdp.NodeID, error) {
 		return pane, nil
 	}
 	last, stalled := "", 0
-	for i := range 200 {
+	for i := range limit {
 		parents, err := b.nodes(selector, pane)
 		if err != nil {
 			return 0, err
@@ -1040,12 +1046,15 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		}
 		return mainPane, nil
 	}
+	fmt.Println("Positioning thread parent in main pane")
+	if mainPane, err = b.positionMainParentWithin(parent, 40); err == nil {
+		return mainPane, nil
+	}
 	parents, err := b.nodes(selector, threadPane)
 	if err != nil {
 		return 0, err
 	}
 	if len(parents) == 0 {
-		fmt.Println("Loading thread parent in thread pane")
 		if err = b.oldest(threadPane); err != nil {
 			return 0, err
 		}
@@ -1055,8 +1064,7 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		}
 	}
 	if len(parents) != 1 {
-		fmt.Println("Thread parent unavailable in thread pane; scanning main pane")
-		return b.positionMainParent(parent)
+		return 0, errors.New("thread parent unavailable in thread pane")
 	}
 	permalink := fmt.Sprintf(`a[href*="/archives/"][href*="/p%s"]`, strings.ReplaceAll(parent, ".", ""))
 	links, err := b.nodes(permalink, parents[0])
@@ -1064,10 +1072,9 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		return 0, err
 	}
 	if len(links) != 1 {
-		fmt.Println("Thread parent permalink unavailable; scanning main pane")
-		return b.positionMainParent(parent)
+		return 0, errors.New("thread parent permalink unavailable")
 	}
-	fmt.Println("Opening thread parent in channel")
+	fmt.Println("Opening thread parent in channel fallback")
 	if err = b.clickID(links[0]); err != nil {
 		return 0, err
 	}
@@ -1082,14 +1089,92 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 				if _, e = chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: parents[0]}); e != nil {
 					return 0, e
 				}
-				fmt.Println("Thread parent opened in channel")
 				return mainPane, nil
 			}
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	fmt.Println("Thread parent did not open directly; scanning main pane")
-	return b.positionMainParent(parent)
+	return 0, errors.New("thread parent did not open in channel fallback")
+}
+
+func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
+	pane, err := b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+	if err == nil {
+		return pane, nil
+	}
+	mainPane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+	if err != nil {
+		return 0, fmt.Errorf("find main message pane to reopen thread: %w", err)
+	}
+	selector := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, parent)
+	parents, err := b.nodes(selector, mainPane)
+	if err != nil {
+		return 0, err
+	}
+	if len(parents) == 1 {
+		parentRect, rectErr := b.box(parents[0])
+		if rectErr == nil {
+			_, rectErr = chromedp.Call(b.ctx, input.DispatchMouseEvent, input.DispatchMouseEventParams{
+				Type: input.DispatchMouseEventTypeMouseMoved,
+				X:    parentRect.x1 + parentRect.width()/2,
+				Y:    parentRect.y1 + parentRect.height()/2,
+			})
+			if rectErr == nil {
+				time.Sleep(500 * time.Millisecond)
+			}
+			bars, barsErr := b.nodes(`[data-qa="reply_bar_view_thread"]`, mainPane)
+			if barsErr == nil {
+				best, distance := cdp.NodeID(0), math.Inf(1)
+				for _, bar := range bars {
+					r, e := b.box(bar)
+					if e != nil || r.y2 < parentRect.y1-20 || r.y1 > parentRect.y2+200 {
+						continue
+					}
+					d := math.Abs(r.y1 - parentRect.y2)
+					if d < distance {
+						best, distance = bar, d
+					}
+				}
+				if best != 0 && b.clickID(best) == nil {
+					if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err == nil {
+						return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+					}
+				}
+			}
+		}
+		resolved, resolveErr := chromedp.Call(b.ctx, dom.ResolveNode, dom.ResolveNodeParams{NodeID: parents[0]})
+		if resolveErr == nil && resolved.Object != nil && resolved.Object.ObjectID != "" {
+			userGesture := true
+			result, clickErr := chromedp.Call(b.ctx, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
+				FunctionDeclaration: `function(){let root=this,bar=null;while(root&&root.getAttribute('data-qa')!=='message_pane'){bar=root.querySelector('[data-qa="reply_bar_view_thread"],button[aria-label*="thread" i],button[aria-label*="reply" i],[role="button"][aria-label*="thread" i],[role="button"][aria-label*="reply" i]');if(bar)break;root=root.parentElement}if(!bar)throw new Error("reply bar not found");bar.click()}`,
+				ObjectID:            resolved.Object.ObjectID,
+				UserGesture:         &userGesture,
+			})
+			_, _ = chromedp.Call(b.ctx, runtime.ReleaseObject, runtime.ReleaseObjectParams{ObjectID: resolved.Object.ObjectID})
+			if clickErr == nil && result.Result != nil && result.ExceptionDetails == nil {
+				if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err == nil {
+					return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+				}
+			}
+		}
+	}
+	selectors := []string{
+		fmt.Sprintf(`[data-qa="virtual-list-item"]:has(%s) [data-qa="reply_bar_view_thread"]`, selector),
+		fmt.Sprintf(`%s [data-qa="reply_bar_view_thread"]`, selector),
+	}
+	var clickErr error
+	for _, selector := range selectors {
+		if clickErr = b.click(selector); clickErr == nil {
+			break
+		}
+	}
+	if clickErr != nil {
+		return 0, fmt.Errorf("reopen thread pane: %w", clickErr)
+	}
+	if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err != nil {
+		return 0, fmt.Errorf("wait for reopened thread pane: %w", err)
+	}
+	return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
 }
 
 func (b *Browser) positionPaneMessage(pane cdp.NodeID, target string) error {
@@ -1193,7 +1278,7 @@ func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out
 		if err != nil {
 			return err
 		}
-		pane, err = b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+		pane, err = b.reopenThreadPane(parent)
 		if err != nil {
 			return err
 		}

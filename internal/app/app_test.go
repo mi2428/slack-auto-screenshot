@@ -752,6 +752,44 @@ func TestThreadReplyAndSearchContext(t *testing.T) {
 	}
 }
 
+func TestReopenThreadPaneAfterParentNavigation(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	parent := "1730000000.000000"
+	markup := `<style>body{margin:0}[data-qa=message_pane],[data-qa=threads_flexpane]{height:600px}[data-qa=slack_kit_scrollbar]{height:500px;overflow:auto}[data-qa=virtual-list-item]{height:100px}</style>` +
+		`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><div data-qa="virtual-list-item"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article><button data-qa="reply_bar_view_thread" onclick="document.body.insertAdjacentHTML('beforeend','<div data-qa=threads_flexpane><div data-qa=slack_kit_scrollbar><div data-qa=message_container data-msg-ts=` + parent + `>Parent</div><div data-qa=message_container data-msg-ts=1730000001.000000>Reply</div></div></div>')">Replies</button></div></div></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(markup)); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := b.reopenThreadPane(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages, err := b.nodes(`[data-qa="message_container"]`, thread); err != nil || len(messages) != 2 {
+		t.Fatalf("reopened thread: %d messages, %v", len(messages), err)
+	}
+
+	ariaMarkup := `<style>body{margin:0}[data-qa=message_pane],[data-qa=threads_flexpane]{height:600px}[data-qa=slack_kit_scrollbar]{height:500px;overflow:auto}[data-qa=virtual-list-item]{height:100px}</style>` +
+		`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><div data-qa="virtual-list-item"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article><button aria-label="Open thread" onclick="document.body.insertAdjacentHTML('beforeend','<div data-qa=threads_flexpane><div data-qa=slack_kit_scrollbar><div data-qa=message_container data-msg-ts=` + parent + `>Parent</div><div data-qa=message_container data-msg-ts=1730000001.000000>Reply</div></div></div>')">Replies</button></div></div></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(ariaMarkup)); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = b.reopenThreadPane(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages, err := b.nodes(`[data-qa="message_container"]`, thread); err != nil || len(messages) != 2 {
+		t.Fatalf("reopened aria thread: %d messages, %v", len(messages), err)
+	}
+}
+
 func TestWaitThreadClosedAfterReplacement(t *testing.T) {
 	t.Chdir(t.TempDir())
 	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
