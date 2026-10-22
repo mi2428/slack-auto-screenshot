@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -963,6 +965,25 @@ func TestSearchResumeStateAndThreadGrouping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyFingerprint, err := json.Marshal(struct {
+		Domain, Query, ExcludeAuthor, ExcludeLeading, ExcludeURLSubstring string
+		Theme                                                             string
+		Width, Height, OutputWidth, Before, After, Limit, Offset          int
+		Scale                                                             float64
+		OldestFirst                                                       bool
+	}{
+		Domain: o.Domain, Query: o.Query, ExcludeAuthor: o.ExcludeAuthor, ExcludeLeading: o.ExcludeLeading,
+		ExcludeURLSubstring: o.ExcludeURLSubstring, Theme: o.Theme, Width: o.Width, Height: o.Height,
+		OutputWidth: o.OutputWidth, Before: o.Before, After: o.After, Limit: o.Limit, Offset: o.Offset,
+		Scale: o.Scale, OldestFirst: o.OldestFirst,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyDigest := sha256.Sum256(legacyFingerprint)
+	if want := filepath.Join(o.Output, fmt.Sprintf(".search-%x.json", legacyDigest[:8])); path != want {
+		t.Fatalf("search state fingerprint changed: got %s, want %s", path, want)
+	}
 	if err = saveSearchState(path, state, out); err != nil {
 		t.Fatal(err)
 	}
@@ -982,8 +1003,8 @@ func TestSearchResumeStateAndThreadGrouping(t *testing.T) {
 		t.Fatalf("resume state = %+v, output = %+v, found=%v: %v", loaded, resumed, found, err)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || bytes.Contains(data, []byte("https://")) {
-		t.Fatalf("resume state retained a private permalink: %v", err)
+	if err != nil || bytes.Contains(data, []byte("https://")) || bytes.Contains(data, []byte(o.Query)) {
+		t.Fatalf("resume state retained a private permalink or search query: %v", err)
 	}
 	if err = os.Remove(filepath.Join(completed, "000001.png")); err != nil {
 		t.Fatal(err)

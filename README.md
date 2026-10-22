@@ -1,6 +1,6 @@
 # Slack Auto Screenshot
 
-A Go CLI that saves PNG screenshots of Slack as rendered in Chrome. Keyword search uses Slack's official API only to enumerate permalinks; message text is never saved.
+A Go CLI that saves PNG screenshots of Slack as rendered in Chrome. Keyword search uses Slack's official API only to enumerate permalinks; message text is never saved. Search query text is not written to resume state or output names.
 
 - Capture available channel, DM, and group DM history, including threads and downloadable attachments. Omit dates to capture all available history.
 - Capture search results with surrounding messages.

@@ -48,11 +48,11 @@ type hit struct {
 }
 
 type searchSpec struct {
-	Domain, Query, ExcludeAuthor, ExcludeLeading, ExcludeURLSubstring string
-	Theme                                                             string
-	Width, Height, OutputWidth, Before, After, Limit, Offset          int
-	Scale                                                             float64
-	OldestFirst                                                       bool
+	Domain, ExcludeAuthor, ExcludeLeading, ExcludeURLSubstring string
+	Theme                                                      string
+	Width, Height, OutputWidth, Before, After, Limit, Offset   int
+	Scale                                                      float64
+	OldestFirst                                                bool
 }
 
 type searchState struct {
@@ -366,7 +366,7 @@ func inventory(ctx context.Context, o Options, api slackAPI) ([]hit, int, int, i
 
 func searchOptions(o Options) searchSpec {
 	return searchSpec{
-		Domain: o.Domain, Query: o.Query, ExcludeAuthor: o.ExcludeAuthor, ExcludeLeading: o.ExcludeLeading,
+		Domain: o.Domain, ExcludeAuthor: o.ExcludeAuthor, ExcludeLeading: o.ExcludeLeading,
 		ExcludeURLSubstring: o.ExcludeURLSubstring, Theme: o.Theme, Width: o.Width, Height: o.Height,
 		OutputWidth: o.OutputWidth, Before: o.Before, After: o.After, Limit: o.Limit, Offset: o.Offset, Scale: o.Scale,
 		OldestFirst: o.OldestFirst,
@@ -374,7 +374,19 @@ func searchOptions(o Options) searchSpec {
 }
 
 func searchStatePath(o Options) (string, error) {
-	data, err := json.Marshal(searchOptions(o))
+	// Keep this fingerprint encoding stable so existing interrupted searches can resume.
+	data, err := json.Marshal(struct {
+		Domain, Query, ExcludeAuthor, ExcludeLeading, ExcludeURLSubstring string
+		Theme                                                             string
+		Width, Height, OutputWidth, Before, After, Limit, Offset          int
+		Scale                                                             float64
+		OldestFirst                                                       bool
+	}{
+		Domain: o.Domain, Query: o.Query, ExcludeAuthor: o.ExcludeAuthor, ExcludeLeading: o.ExcludeLeading,
+		ExcludeURLSubstring: o.ExcludeURLSubstring, Theme: o.Theme, Width: o.Width, Height: o.Height,
+		OutputWidth: o.OutputWidth, Before: o.Before, After: o.After, Limit: o.Limit, Offset: o.Offset,
+		Scale: o.Scale, OldestFirst: o.OldestFirst,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -709,7 +721,7 @@ func runSearch(o Options) error {
 	}
 	summary := fmt.Sprintf("Search API hits: %d\nLeading mentions excluded: %d\nURL-only hits excluded: %d\nSearch hits captured: %d\nAttachments: %d saved, %d missing", state.Total, state.LeadingExcluded, state.URLExcluded, len(state.Completed), len(out.Saved), len(out.Missing))
 	finishStarted := time.Now()
-	path, err := out.Finish(o.Query, summary, o.Gzip)
+	path, err := out.Finish("search", summary, o.Gzip)
 	if err != nil {
 		return err
 	}
