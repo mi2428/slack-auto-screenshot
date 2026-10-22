@@ -228,8 +228,12 @@ func (b *Browser) dismissAutocomplete() error {
 	if _, err = b.box(modal[0]); err != nil {
 		return nil
 	}
+	return b.pressEscape()
+}
+
+func (b *Browser) pressEscape() error {
 	for _, typ := range []input.DispatchKeyEventType{input.DispatchKeyEventTypeRawKeyDown, input.DispatchKeyEventTypeKeyUp} {
-		if _, err = chromedp.Call(b.ctx, input.DispatchKeyEvent, input.DispatchKeyEventParams{Type: typ, Key: "Escape", Code: "Escape", WindowsVirtualKeyCode: 27}); err != nil {
+		if _, err := chromedp.Call(b.ctx, input.DispatchKeyEvent, input.DispatchKeyEventParams{Type: typ, Key: "Escape", Code: "Escape", WindowsVirtualKeyCode: 27}); err != nil {
 			return err
 		}
 	}
@@ -237,35 +241,40 @@ func (b *Browser) dismissAutocomplete() error {
 }
 
 func (b *Browser) dismissAvailabilityReminder() error {
-	dialogs, err := b.nodes(slackUIAvailabilityDialog, 0)
-	if err != nil {
-		return err
-	}
-	var dialog cdp.NodeID
-	for _, id := range dialogs {
-		if _, err = b.box(id); err != nil {
-			continue
+	for range 5 {
+		dialogs, err := b.nodes(slackUIAvailabilityDialog, 0)
+		if err != nil {
+			return err
 		}
-		if dialog != 0 {
-			return errors.New("multiple Slack dialogs are open")
+		var dialog cdp.NodeID
+		for _, id := range dialogs {
+			if _, err = b.box(id); err == nil {
+				dialog = id
+				break
+			}
 		}
-		dialog = id
+		if dialog == 0 {
+			return nil
+		}
+		if err = b.dismissSlackDialog(dialog); err != nil {
+			return err
+		}
 	}
-	if dialog == 0 {
-		return nil
-	}
+	return errors.New("too many Slack dialogs remained open")
+}
+
+func (b *Browser) dismissSlackDialog(dialog cdp.NodeID) error {
 	text, err := b.text(dialog)
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(text, "Set yourself to active?") {
-		return errors.New("unexpected Slack dialog is open")
-	}
-	buttons, err := b.nodes(slackUIAvailabilityButtons, dialog)
+	availabilityReminder := strings.Contains(text, "Set yourself to active?")
+	buttons, err := b.nodes(slackUIAvailabilityButtons+", "+slackUIAvailabilityClose, dialog)
 	if err != nil {
 		return err
 	}
-	var choice cdp.NodeID
+	var choice, closeChoice cdp.NodeID
+	var actionLabels []string
 	for _, id := range buttons {
 		if _, err = b.box(id); err != nil {
 			continue
@@ -280,44 +289,147 @@ func (b *Browser) dismissAvailabilityReminder() error {
 				return err
 			}
 		}
-		if isCurrentStatusChoice(label) {
+		if label != "" {
+			actionLabels = append(actionLabels, label)
+		}
+		if availabilityReminder && isCurrentStatusChoice(label) ||
+			!availabilityReminder && (isExplicitCurrentStatusChoice(label) || isSafeDialogDismissal(label)) {
 			if choice != 0 {
-				return errors.New("multiple current-status choices are available")
+				return errors.New("multiple safe choices are available in the Slack dialog")
 			}
 			choice = id
+		} else if !availabilityReminder && closeChoice == 0 {
+			closeButtons, closeErr := b.nodes(slackUIAvailabilityClose, dialog)
+			if closeErr != nil {
+				return closeErr
+			}
+			if len(closeButtons) == 1 && closeButtons[0] == id {
+				closeChoice = id
+				actionLabels = append(actionLabels, "Slack close control")
+			}
 		}
 	}
 	if choice == 0 {
-		return errors.New("slack availability reminder has no safe current-status choice")
+		choice = closeChoice
 	}
-	if err = b.clickID(choice); err != nil {
-		return err
-	}
-	for range 20 {
-		visible := false
-		dialogs, err = b.nodes(slackUIAvailabilityDialog, 0)
-		if err != nil {
+	if choice == 0 {
+		if availabilityReminder {
+			return fmt.Errorf("slack availability reminder has no safe current-status choice; available buttons: %q", actionLabels)
+		}
+		if err = b.pressEscape(); err != nil {
 			return err
 		}
-		for _, id := range dialogs {
-			if _, err = b.box(id); err == nil {
-				visible = true
-				break
-			}
+		if err = b.waitForSlackDialogClosed(dialog); err != nil {
+			return fmt.Errorf("%w; available buttons: %q", err, actionLabels)
 		}
-		if !visible {
+		return nil
+	}
+	if err = b.clickDialogChoice(dialog, choice); err != nil {
+		return fmt.Errorf("%w; available buttons: %q", err, actionLabels)
+	}
+	return nil
+}
+
+func (b *Browser) clickDialogChoice(dialog, choice cdp.NodeID) error {
+	if err := b.clickID(choice); err != nil {
+		return err
+	}
+	if err := b.waitForSlackDialogClosed(dialog); err == nil {
+		return nil
+	} else if b.ctx.Err() != nil {
+		return b.ctx.Err()
+	}
+	if err := b.clickDialogChoiceWithMouse(choice); err != nil {
+		return err
+	}
+	if err := b.waitForSlackDialogClosed(dialog); err == nil {
+		return nil
+	} else if b.ctx.Err() != nil {
+		return b.ctx.Err()
+	}
+	if err := b.pressEscape(); err != nil {
+		return err
+	}
+	return b.waitForSlackDialogClosed(dialog)
+}
+
+func (b *Browser) clickDialogChoiceWithMouse(id cdp.NodeID) error {
+	if _, err := chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: id}); err != nil {
+		return err
+	}
+	r, err := b.box(id)
+	if err != nil {
+		return err
+	}
+	x, y := r.x1+r.width()/2, r.y1+r.height()/2
+	resolved, err := chromedp.Call(b.ctx, dom.ResolveNode, dom.ResolveNodeParams{NodeID: id})
+	if err != nil {
+		return err
+	}
+	if resolved.Object == nil || resolved.Object.ObjectID == "" {
+		return errors.New("resolve dialog choice for mouse click: no JavaScript object")
+	}
+	defer func() {
+		_, _ = chromedp.Call(b.ctx, runtime.ReleaseObject, runtime.ReleaseObjectParams{ObjectID: resolved.Object.ObjectID})
+	}()
+	hit, err := chromedp.Call(b.ctx, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
+		FunctionDeclaration: slackDialogClickVisibilityCheck,
+		ObjectID:            resolved.Object.ObjectID,
+	})
+	if err != nil {
+		return err
+	}
+	if hit.ExceptionDetails != nil {
+		return errors.New("dialog choice is obscured; refusing a mouse click")
+	}
+	for _, event := range []input.DispatchMouseEventParams{
+		{Type: input.DispatchMouseEventTypeMouseMoved, X: x, Y: y},
+		{Type: input.DispatchMouseEventTypeMousePressed, X: x, Y: y, Button: input.MouseButtonLeft, ClickCount: 1},
+		{Type: input.DispatchMouseEventTypeMouseReleased, X: x, Y: y, Button: input.MouseButtonLeft, ClickCount: 1},
+	} {
+		if _, err = chromedp.Call(b.ctx, input.DispatchMouseEvent, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Browser) waitForSlackDialogClosed(dialog cdp.NodeID) error {
+	for range 20 {
+		if _, err := b.box(dialog); err != nil {
+			if b.ctx.Err() != nil {
+				return b.ctx.Err()
+			}
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("slack availability reminder remained open after choosing current status")
+	return errors.New("slack dialog remained open after dismissal")
 }
 
 func isCurrentStatusChoice(label string) bool {
-	label = strings.ToLower(strings.Join(strings.Fields(label), " "))
-	return label == "no" || label == "not now" || strings.HasPrefix(label, "no, keep ") ||
+	label = normalizedButtonLabel(label)
+	return label == "no" || label == "not now" || isExplicitCurrentStatusChoice(label)
+}
+
+func isExplicitCurrentStatusChoice(label string) bool {
+	label = normalizedButtonLabel(label)
+	return strings.HasPrefix(label, "no, keep ") ||
 		strings.HasPrefix(label, "keep my status") || strings.HasPrefix(label, "keep current status") ||
 		strings.HasPrefix(label, "keep me away")
+}
+
+func isSafeDialogDismissal(label string) bool {
+	switch normalizedButtonLabel(label) {
+	case "close", "dismiss", "cancel", "not now", "maybe later", "got it", "ok", "okay":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedButtonLabel(label string) string {
+	return strings.ToLower(strings.Join(strings.Fields(label), " "))
 }
 
 func (b *Browser) resolveChannel(workspace, name, domain string) (string, error) {

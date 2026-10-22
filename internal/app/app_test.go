@@ -848,6 +848,13 @@ func TestClickIDDoesNotHitOverlay(t *testing.T) {
 	if err != nil || clicks.Target != 1 || clicks.Overlay != 0 {
 		t.Fatalf("clicks = %+v: %v", clicks, err)
 	}
+	if err = b.clickDialogChoiceWithMouse(target); err == nil {
+		t.Fatal("mouse click accepted a target obscured by an overlay")
+	}
+	clicks, err = chromedp.Run(b.ctx, chromedp.Evaluate[struct{ Target, Overlay int }](`({Target:window.targetClicks||0,Overlay:window.overlayClicks||0})`))
+	if err != nil || clicks.Target != 1 || clicks.Overlay != 0 {
+		t.Fatalf("obscured mouse click changed a button: %+v: %v", clicks, err)
+	}
 }
 
 func TestSlackAPIInventory(t *testing.T) {
@@ -1217,7 +1224,7 @@ func TestAvailabilityReminderKeepsCurrentStatus(t *testing.T) {
 
 	unknown := `<div role="dialog"><p>Set yourself to active?</p>` +
 		`<button onclick="window.activeChanges=(window.activeChanges||0)+1">Set me to active</button>` +
-		`<button onclick="window.otherChanges=(window.otherChanges||0)+1">Maybe later</button></div>`
+		`<button onclick="window.otherChanges=(window.otherChanges||0)+1">Change setting</button></div>`
 	if err = b.navigate("data:text/html," + url.PathEscape(unknown)); err != nil {
 		t.Fatal(err)
 	}
@@ -1229,5 +1236,33 @@ func TestAvailabilityReminderKeepsCurrentStatus(t *testing.T) {
 	))
 	if err != nil || otherCounts.Active != 0 || otherCounts.Other != 0 {
 		t.Fatalf("unknown status choices = %+v: %v", otherCounts, err)
+	}
+
+	closable := `<div role="dialog"><p>First informational dialog</p>` +
+		`<button aria-label="Close" onclick="if(event.isTrusted){window.closedCount=(window.closedCount||0)+1;this.closest('[role=dialog]').remove()}">Close</button></div>` +
+		`<div role="dialog"><p>Second informational dialog</p>` +
+		`<button aria-label="Close" onclick="if(event.isTrusted){window.closedCount=(window.closedCount||0)+1;this.closest('[role=dialog]').remove()}">Close</button></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(closable)); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.dismissAvailabilityReminder(); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := chromedp.Run(b.ctx, chromedp.Evaluate[int](`window.closedCount||0`))
+	if err != nil || closed != 2 {
+		t.Fatalf("safe dialog dismissal = %d: %v", closed, err)
+	}
+
+	escape := `<script>window.escaped=0;document.addEventListener('keydown',e=>{if(e.key==='Escape'){window.escaped++;document.querySelector('[role=dialog]').remove()}})</script>` +
+		`<div role="dialog"><p>Informational dialog</p><button>Maybe later</button></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(escape)); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.dismissAvailabilityReminder(); err != nil {
+		t.Fatal(err)
+	}
+	escaped, err := chromedp.Run(b.ctx, chromedp.Evaluate[int](`window.escaped||0`))
+	if err != nil || escaped != 1 {
+		t.Fatalf("dialog Escape fallback = %d: %v", escaped, err)
 	}
 }
