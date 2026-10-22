@@ -13,7 +13,7 @@ const (
 	slackUIMessageWithTimestamp  = slackUIMessage + `[data-msg-ts="%s"]`
 	slackUIMessagesWithTimestamp = slackUIMessage + `[data-msg-ts]`
 	slackUIScrollbar             = `[data-qa="slack_kit_scrollbar"]`
-	slackUIThreadReplyBar        = `[data-qa="reply_bar_view_thread"]`
+	slackUIThreadReplyBar        = `:is([data-qa="reply_bar_view_thread"],button[aria-label*="thread" i],button[aria-label*="repl" i],[role="button"][aria-label*="thread" i],[role="button"][aria-label*="repl" i])`
 	slackUIVirtualListItem       = `[data-qa="virtual-list-item"]`
 	slackUIThreadCloseButtons    = `[data-qa="close_flexpane"], [data-qa="unstyled-button"][aria-label="Close"]`
 	slackUIAvailabilityDialog    = `[role="dialog"]`
@@ -29,7 +29,7 @@ const (
 	slackUIAttachmentLinks       = `a[href*="files.slack.com/files-pri/"],a[data-qa="message_file_link"]`
 	slackUIFileName              = `[data-qa="file_name"]`
 	slackUIFileCollapse          = `[data-qa="file-collapse-button"]`
-	slackUIThreadReplyItems      = `[data-qa="virtual-list-item"]:has([data-qa="reply_bar_view_thread"])`
+	slackUIThreadReplyItems      = `[data-qa="virtual-list-item"]:has(` + slackUIThreadReplyBar + `)`
 )
 
 const captureSidebarCSS = `[data-qa="search_tip_banner"]{display:none!important}` +
@@ -38,7 +38,7 @@ const captureSidebarCSS = `[data-qa="search_tip_banner"]{display:none!important}
 
 const slackPendingFileImages = `Array.from(document.querySelectorAll('[data-qa="message_kit_files"] img')).filter(i => {const r=i.getBoundingClientRect();return r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0&&r.left<innerWidth&&r.right>0&&!i.complete}).length`
 
-const slackReopenThreadClick = `function(){let root=this,bar=null;while(root&&root.getAttribute('data-qa')!=='message_pane'){bar=root.querySelector('[data-qa="reply_bar_view_thread"],button[aria-label*="thread" i],button[aria-label*="reply" i],[role="button"][aria-label*="thread" i],[role="button"][aria-label*="reply" i]');if(bar)break;root=root.parentElement}if(!bar)throw new Error("reply bar not found");bar.click()}`
+const slackReopenThreadClick = `function(){let root=this,bar=null;while(root&&root.getAttribute('data-qa')!=='message_pane'){bar=root.querySelector('[data-qa="reply_bar_view_thread"],button[aria-label*="thread" i],button[aria-label*="repl" i],[role="button"][aria-label*="thread" i],[role="button"][aria-label*="repl" i]');if(bar)break;root=root.parentElement}if(!bar)throw new Error("reply bar not found");bar.click()}`
 
 const slackDialogClickVisibilityCheck = `function(){const r=this.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);if(hit!==this&&!this.contains(hit))throw new Error("dialog choice is obscured")}`
 

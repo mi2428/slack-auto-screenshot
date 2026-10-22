@@ -360,7 +360,7 @@ func (b *Browser) captureSearchHit(workspace string, h hit, index, total int, o 
 		}
 		if reusePane && attempt == firstAttempt {
 			fmt.Println("Reusing open message pane")
-			captureErr = b.captureContext(h.TS, h.Parent, directory, o, out, true, messages)
+			captureErr = b.captureContextAt(workspace, h.Channel, h.TS, h.Parent, directory, o, out, true, messages)
 			if captureErr == nil {
 				return messages, nil
 			}
@@ -398,7 +398,7 @@ func (b *Browser) captureSearchHit(workspace string, h hit, index, total int, o 
 				fmt.Printf("Search channel preparation: %d ms\n", time.Since(prepareStarted).Milliseconds())
 			}
 			if captureErr == nil {
-				captureErr = b.captureContext(h.TS, h.Parent, directory, o, out, false, messages)
+				captureErr = b.captureContextAt(workspace, h.Channel, h.TS, h.Parent, directory, o, out, false, messages)
 			}
 		}
 		if captureErr == nil {

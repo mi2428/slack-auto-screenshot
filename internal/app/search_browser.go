@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,7 +129,7 @@ func (b *Browser) positionMainParentWithin(parent string, limit int) (cdp.NodeID
 }
 
 func (b *Browser) prepareChannelHit(ts string) error {
-	return b.within(2*time.Minute, func() error {
+	return b.within(searchContextTimeout, func() error {
 		pane, _, thread, err := b.targetPane(ts)
 		if err != nil {
 			return err
@@ -159,7 +160,7 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		return mainPane, nil
 	}
 	fmt.Println("Positioning thread parent in main pane")
-	if mainPane, err = b.positionMainParentWithin(parent, 40); err == nil {
+	if mainPane, err = b.positionMainParentWithin(parent, 200); err == nil {
 		return mainPane, nil
 	}
 	parents, err := b.nodes(selector, threadPane)
@@ -209,9 +210,22 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 	return 0, errors.New("thread parent did not open in channel fallback")
 }
 
-func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
+func (b *Browser) reopenThreadPane(workspace, channel, parent string) (cdp.NodeID, error) {
 	pane, err := b.paneFor(slackUIThreadMessages)
 	if err == nil {
+		return pane, nil
+	}
+	fmt.Println("Trying to reopen thread from the canonical conversation route")
+	route, routeErr := slackThreadRoute(workspace, channel, parent)
+	if routeErr != nil {
+		fmt.Println("Canonical conversation route unavailable; trying UI controls")
+	} else if navErr := b.navigateWithin(route, searchNavigationTimeout); navErr != nil {
+		fmt.Println("Canonical thread navigation failed; trying UI controls")
+	} else if waitErr := b.wait(slackUIThreadMessages, 60*time.Second); waitErr != nil {
+		fmt.Println("Canonical thread pane did not appear; trying UI controls")
+	} else if _, parentErr := b.positionMainParentWithin(parent, 200); parentErr != nil {
+		fmt.Println("Canonical thread route did not show its parent in the main pane; trying UI controls")
+	} else if pane, paneErr := b.paneFor(slackUIThreadMessages); paneErr == nil {
 		return pane, nil
 	}
 	mainPane, err := b.paneFor(slackUIConversationMessages)
@@ -289,6 +303,20 @@ func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
 	return b.paneFor(slackUIThreadMessages)
 }
 
+func slackThreadRoute(workspace, channel, parent string) (string, error) {
+	u, err := url.Parse(workspace)
+	if err != nil || u.Scheme != "https" && u.Scheme != "http" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("slack workspace route is invalid")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 2 || parts[0] != "client" || !slackChannel.MatchString(parts[1]) ||
+		!slackChannel.MatchString(channel) || !messageTimestamp.MatchString(parent) {
+		return "", errors.New("slack channel or thread timestamp is invalid")
+	}
+	query := url.Values{"thread_ts": {parent}, "cid": {channel}}
+	return fmt.Sprintf("%s/%s/thread/%s-%s?%s", strings.TrimRight(workspace, "/"), channel, channel, parent, query.Encode()), nil
+}
+
 func (b *Browser) positionPaneMessage(pane cdp.NodeID, target string) error {
 	return b.positionPaneMessageWithin(pane, target, 200)
 }
@@ -341,21 +369,29 @@ func (b *Browser) positionPaneMessageWithin(pane cdp.NodeID, target string, limi
 }
 
 func (b *Browser) captureContext(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
-	return b.captureContextWithin(ts, parent, directory, o, out, reusePane, captured, searchContextTimeout)
+	return b.captureContextAt("", "", ts, parent, directory, o, out, reusePane, captured)
+}
+
+func (b *Browser) captureContextAt(workspace, channel, ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
+	return b.captureContextWithinRoute(workspace, channel, ts, parent, directory, o, out, reusePane, captured, searchContextTimeout)
 }
 
 func (b *Browser) captureContextWithin(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool, timeout time.Duration) error {
+	return b.captureContextWithinRoute("", "", ts, parent, directory, o, out, reusePane, captured, timeout)
+}
+
+func (b *Browser) captureContextWithinRoute(workspace, channel, ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool, timeout time.Duration) error {
 	return b.within(timeout, func() error {
-		return b.captureContextRun(ts, parent, directory, o, out, reusePane, captured)
+		return b.captureContextRun(workspace, channel, ts, parent, directory, o, out, reusePane, captured)
 	})
 }
 
-func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
+func (b *Browser) captureContextRun(workspace, channel, ts, parent, directory string, o Options, out *Output, reusePane bool, captured map[string]bool) error {
 	started := time.Now()
 	defer func() { fmt.Printf("Search context capture: %d ms\n", time.Since(started).Milliseconds()) }()
 	var pane, mainPane cdp.NodeID
 	var thread bool
-	err := b.within(2*time.Minute, func() error {
+	err := b.within(searchContextTimeout, func() error {
 		var err error
 		if reusePane {
 			if parent == ts {
@@ -390,7 +426,7 @@ func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out
 		if err != nil {
 			return err
 		}
-		pane, err = b.reopenThreadPane(parent)
+		pane, err = b.reopenThreadPane(workspace, channel, parent)
 		if err != nil {
 			return err
 		}

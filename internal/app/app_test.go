@@ -770,7 +770,7 @@ func TestReopenThreadPaneAfterParentNavigation(t *testing.T) {
 	if err = b.navigate("data:text/html," + url.PathEscape(markup)); err != nil {
 		t.Fatal(err)
 	}
-	thread, err := b.reopenThreadPane(parent)
+	thread, err := b.reopenThreadPane("", "", parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,16 +779,62 @@ func TestReopenThreadPaneAfterParentNavigation(t *testing.T) {
 	}
 
 	ariaMarkup := `<style>body{margin:0}[data-qa=message_pane],[data-qa=threads_flexpane]{height:600px}[data-qa=slack_kit_scrollbar]{height:500px;overflow:auto}[data-qa=virtual-list-item]{height:100px}</style>` +
-		`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><div data-qa="virtual-list-item"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article><button aria-label="Open thread" onclick="document.body.insertAdjacentHTML('beforeend','<div data-qa=threads_flexpane><div data-qa=slack_kit_scrollbar><div data-qa=message_container data-msg-ts=` + parent + `>Parent</div><div data-qa=message_container data-msg-ts=1730000001.000000>Reply</div></div></div>')">Replies</button></div></div></div>`
+		`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><div data-qa="virtual-list-item"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article><button aria-label="View 2 replies" onclick="document.body.insertAdjacentHTML('beforeend','<div data-qa=threads_flexpane><div data-qa=slack_kit_scrollbar><div data-qa=message_container data-msg-ts=` + parent + `>Parent</div><div data-qa=message_container data-msg-ts=1730000001.000000>Reply</div></div></div>')">Replies</button></div></div></div>`
 	if err = b.navigate("data:text/html," + url.PathEscape(ariaMarkup)); err != nil {
 		t.Fatal(err)
 	}
-	thread, err = b.reopenThreadPane(parent)
+	thread, err = b.reopenThreadPane("", "", parent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if messages, err := b.nodes(`[data-qa="message_container"]`, thread); err != nil || len(messages) != 2 {
 		t.Fatalf("reopened aria thread: %d messages, %v", len(messages), err)
+	}
+}
+
+func TestReopenThreadPaneUsesConversationRoute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	parent := "1730000000.000000"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		markup := `<style>body{margin:0}[data-qa=message_pane],[data-qa=threads_flexpane]{height:600px}[data-qa=slack_kit_scrollbar]{height:500px;overflow:auto}article{height:100px}</style>` +
+			`<div data-qa="message_pane"><div data-qa="slack_kit_scrollbar"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article></div></div>`
+		if strings.Contains(r.URL.Path, "/thread/") {
+			markup += `<div data-qa="threads_flexpane"><div data-qa="slack_kit_scrollbar"><article data-qa="message_container" data-msg-ts="` + parent + `">Parent</article><article data-qa="message_container" data-msg-ts="1730000001.000000">Reply</article></div></div>`
+		}
+		_, _ = io.WriteString(w, markup)
+	}))
+	defer server.Close()
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.navigate(server.URL + "/client/T123/C123"); err != nil {
+		t.Fatal(err)
+	}
+	thread, err := b.reopenThreadPane(server.URL+"/client/T123", "C123", parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages, err := b.nodes(slackUIThreadMessages, 0); err != nil || len(messages) != 2 {
+		t.Fatalf("reopened thread route: %d messages: %v", len(messages), err)
+	}
+	mainPane, err := b.paneFor(slackUIConversationMessages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parents, err := b.nodes(slackMessageAt(parent), mainPane)
+	if err != nil || len(parents) != 1 {
+		t.Fatalf("thread parent missing from main pane: %d: %v", len(parents), err)
+	}
+	if _, err = b.box(parents[0]); err != nil {
+		t.Fatalf("thread parent is not visible in main pane: %v", err)
+	}
+	if thread == 0 {
+		t.Fatal("reopenThreadPane returned an empty thread pane")
 	}
 }
 
