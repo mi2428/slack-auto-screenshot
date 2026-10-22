@@ -1225,7 +1225,7 @@ func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out
 			return e
 		}
 		prev := signature(msg)
-		if e = b.wheel(pane, -math.Max(1, rect.height()*0.9)); e != nil {
+		if e = b.wheel(pane, -math.Max(1, rect.height()*0.45)); e != nil {
 			return e
 		}
 		fresh, e := b.visible(pane, nil)
