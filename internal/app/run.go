@@ -288,7 +288,7 @@ func (b *Browser) dismissAvailabilityReminder() error {
 		}
 	}
 	if choice == 0 {
-		return errors.New("Slack availability reminder has no safe current-status choice")
+		return errors.New("slack availability reminder has no safe current-status choice")
 	}
 	if err = b.clickID(choice); err != nil {
 		return err
@@ -310,7 +310,7 @@ func (b *Browser) dismissAvailabilityReminder() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("Slack availability reminder remained open after choosing current status")
+	return errors.New("slack availability reminder remained open after choosing current status")
 }
 
 func isCurrentStatusChoice(label string) bool {
