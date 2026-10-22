@@ -881,6 +881,18 @@ func TestSlackAPIInventory(t *testing.T) {
 	}
 }
 
+func TestSlackAPIRejectsInvalidAuthenticationURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"ok":true,"url":"%","user":"alice","user_id":"U1"}`)
+	}))
+	defer server.Close()
+
+	api := slackAPI{baseURL: server.URL + "/", token: "secret", client: server.Client()}
+	if _, err := api.authenticate(context.Background(), "yourorg.slack.com"); err == nil {
+		t.Fatal("invalid authentication URL was accepted")
+	}
+}
+
 func TestSlackAPIFailsOnCollapsedResults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"ok":true,"messages":{"matches":[{"permalink":"https://yourorg.slack.com/archives/C123/p1730000000000000","ts":"1730000000.000000"}],"total":2,"pagination":{"page_count":1,"total_count":2}}}`)

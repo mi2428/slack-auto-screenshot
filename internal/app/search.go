@@ -179,7 +179,10 @@ func (a slackAPI) authenticate(ctx context.Context, domain string) (slackAuth, e
 		return auth, fmt.Errorf("slack auth.test: %s", auth.Error)
 	}
 	u, err := url.Parse(auth.URL)
-	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), domain) {
+	if err != nil {
+		return auth, fmt.Errorf("slack auth.test returned an invalid workspace URL: %w", err)
+	}
+	if u.Scheme != "https" || u.User != nil || !strings.EqualFold(u.Host, domain) {
 		return auth, fmt.Errorf("keychain token belongs to %s, not %s", u.Hostname(), domain)
 	}
 	if auth.User == "" || auth.UserID == "" {
