@@ -1120,3 +1120,47 @@ func TestPageOnlyTheme(t *testing.T) {
 		}
 	}
 }
+
+func TestAvailabilityReminderKeepsCurrentStatus(t *testing.T) {
+	t.Chdir(t.TempDir())
+	b, err := OpenBrowser(Options{Width: 800, Height: 600, Scale: 1}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err = b.setup(); err != nil {
+		t.Fatal(err)
+	}
+
+	markup := `<div role="dialog"><p>Set yourself to active?</p>` +
+		`<button onclick="window.activeChanges=(window.activeChanges||0)+1">Yes, set me to active</button>` +
+		`<button onclick="window.kept=(window.kept||0)+1;this.closest('[role=dialog]').remove()">No, keep my current status</button></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(markup)); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.dismissAvailabilityReminder(); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := chromedp.Run(b.ctx, chromedp.Evaluate[struct{ Active, Kept int }](
+		`({Active:window.activeChanges||0,Kept:window.kept||0})`,
+	))
+	if err != nil || counts.Active != 0 || counts.Kept != 1 {
+		t.Fatalf("status choices = %+v: %v", counts, err)
+	}
+
+	unknown := `<div role="dialog"><p>Set yourself to active?</p>` +
+		`<button onclick="window.activeChanges=(window.activeChanges||0)+1">Set me to active</button>` +
+		`<button onclick="window.otherChanges=(window.otherChanges||0)+1">Maybe later</button></div>`
+	if err = b.navigate("data:text/html," + url.PathEscape(unknown)); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.dismissAvailabilityReminder(); err == nil {
+		t.Fatal("availability reminder without an explicit safe choice was accepted")
+	}
+	otherCounts, err := chromedp.Run(b.ctx, chromedp.Evaluate[struct{ Active, Other int }](
+		`({Active:window.activeChanges||0,Other:window.otherChanges||0})`,
+	))
+	if err != nil || otherCounts.Active != 0 || otherCounts.Other != 0 {
+		t.Fatalf("unknown status choices = %+v: %v", otherCounts, err)
+	}
+}

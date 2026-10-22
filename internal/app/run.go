@@ -238,28 +238,87 @@ func (b *Browser) dismissAutocomplete() error {
 }
 
 func (b *Browser) dismissAvailabilityReminder() error {
-	buttons, err := b.nodes(`[data-qa="sk_close_modal_button"]`, 0)
-	if err != nil || len(buttons) == 0 {
-		return err
-	}
-	if _, err = b.box(buttons[0]); err != nil {
-		return nil
-	}
-	dialogs, err := b.nodes(`[role="dialog"]:has([data-qa="sk_close_modal_button"])`, 0)
+	dialogs, err := b.nodes(`[role="dialog"]`, 0)
 	if err != nil {
 		return err
 	}
-	if len(dialogs) != 1 {
-		return errors.New("unexpected Slack dialog is open")
+	var dialog cdp.NodeID
+	for _, id := range dialogs {
+		if _, err = b.box(id); err != nil {
+			continue
+		}
+		if dialog != 0 {
+			return errors.New("multiple Slack dialogs are open")
+		}
+		dialog = id
 	}
-	text, err := b.text(dialogs[0])
+	if dialog == 0 {
+		return nil
+	}
+	text, err := b.text(dialog)
 	if err != nil {
 		return err
 	}
 	if !strings.Contains(text, "Set yourself to active?") {
 		return errors.New("unexpected Slack dialog is open")
 	}
-	return b.clickID(buttons[0])
+	buttons, err := b.nodes(`button, [role="button"]`, dialog)
+	if err != nil {
+		return err
+	}
+	var choice cdp.NodeID
+	for _, id := range buttons {
+		if _, err = b.box(id); err != nil {
+			continue
+		}
+		label, err := b.text(id)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(label) == "" {
+			label, err = b.attr(id, "aria-label")
+			if err != nil {
+				return err
+			}
+		}
+		if isCurrentStatusChoice(label) {
+			if choice != 0 {
+				return errors.New("multiple current-status choices are available")
+			}
+			choice = id
+		}
+	}
+	if choice == 0 {
+		return errors.New("Slack availability reminder has no safe current-status choice")
+	}
+	if err = b.clickID(choice); err != nil {
+		return err
+	}
+	for range 20 {
+		visible := false
+		dialogs, err = b.nodes(`[role="dialog"]`, 0)
+		if err != nil {
+			return err
+		}
+		for _, id := range dialogs {
+			if _, err = b.box(id); err == nil {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("Slack availability reminder remained open after choosing current status")
+}
+
+func isCurrentStatusChoice(label string) bool {
+	label = strings.ToLower(strings.Join(strings.Fields(label), " "))
+	return label == "no" || label == "not now" || strings.HasPrefix(label, "no, keep ") ||
+		strings.HasPrefix(label, "keep my status") || strings.HasPrefix(label, "keep current status") ||
+		strings.HasPrefix(label, "keep me away")
 }
 
 func (b *Browser) resolveChannel(workspace, name, domain string) (string, error) {
