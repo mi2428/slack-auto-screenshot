@@ -102,12 +102,33 @@ func signature(msg []message) string {
 	return fmt.Sprintf("%s:%.0f/%s:%.0f", msg[0].ts, msg[0].rect.y1, msg[len(msg)-1].ts, msg[len(msg)-1].rect.y2)
 }
 
-func (b *Browser) oldest(pane cdp.NodeID) error {
+func (b *Browser) captureStart(pane cdp.NodeID, from string) error {
 	previous, stable := "", 0
 	for i := range 20000 {
 		loaded, err := b.nodes(slackUIMessagesWithTimestamp, pane)
 		if err != nil {
 			return err
+		}
+		if from != "" {
+			var anchor cdp.NodeID
+			for _, id := range loaded {
+				ts, err := b.attr(id, "data-msg-ts")
+				if err != nil {
+					return err
+				}
+				day, err := localDay(ts)
+				if err != nil {
+					return err
+				}
+				if day > from {
+					break
+				}
+				anchor = id
+			}
+			if anchor != 0 {
+				_, err = chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: anchor})
+				return err
+			}
 		}
 		if len(loaded) > 0 {
 			_, err = chromedp.Call(b.ctx, dom.ScrollIntoViewIfNeeded, dom.ScrollIntoViewIfNeededParams{NodeID: loaded[0]})
@@ -141,7 +162,7 @@ func (b *Browser) oldest(pane cdp.NodeID) error {
 			fmt.Printf("Loading older history: %d scrolls\n", i)
 		}
 	}
-	return errors.New("could not reach the oldest available message; capture incomplete")
+	return errors.New("could not reach the capture start; capture incomplete")
 }
 
 func (b *Browser) save(out *Output, pane cdp.NodeID, clip *page.Viewport, file string) ([]message, error) {
@@ -193,7 +214,7 @@ func (b *Browser) paneFor(selector string) (cdp.NodeID, error) {
 }
 
 func (b *Browser) scan(pane cdp.NodeID, from, to string) (bool, error) {
-	if err := b.oldest(pane); err != nil {
+	if err := b.captureStart(pane, ""); err != nil {
 		return false, err
 	}
 	last, stalled, matching := "", 0, false
@@ -229,8 +250,8 @@ func (b *Browser) scan(pane cdp.NodeID, from, to string) (bool, error) {
 }
 
 func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, opts frameOptions, onFrame func(cdp.NodeID) error) (int, error) {
-	if err := b.oldest(pane); err != nil {
-		return 0, fmt.Errorf("reach oldest message for %s: %w", opts.prefix, err)
+	if err := b.captureStart(pane, opts.from); err != nil {
+		return 0, fmt.Errorf("reach capture start for %s: %w", opts.prefix, err)
 	}
 	if opts.from != "" {
 		start, err := b.visible(pane, nil)
@@ -238,7 +259,7 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 			return 0, err
 		}
 		if len(start) > 0 {
-			fmt.Printf("Oldest visible range: %s to %s\n", start[0].day, start[len(start)-1].day)
+			fmt.Printf("Capture start range: %s to %s\n", start[0].day, start[len(start)-1].day)
 		}
 	}
 	last, stalled, frames, recoveries := "", 0, 0, 0

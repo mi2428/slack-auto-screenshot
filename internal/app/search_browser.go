@@ -167,7 +167,7 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		return 0, err
 	}
 	if len(parents) == 0 {
-		if err = b.oldest(threadPane); err != nil {
+		if err = b.captureStart(threadPane, ""); err != nil {
 			return 0, err
 		}
 		parents, err = b.nodes(selector, threadPane)
