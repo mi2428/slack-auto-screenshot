@@ -32,11 +32,6 @@ type frameOptions struct {
 	from, to string
 }
 
-// Keep Slack's native grid while a thread is open; its pane needs a third column.
-const captureSidebarCSS = `[data-qa="search_tip_banner"]{display:none!important}` +
-	`.p-client_workspace__tabpanel:not(:has([data-qa="threads_flexpane"])){grid-template-columns:0 minmax(0,1fr)!important}` +
-	`.p-client_workspace__tabpanel:not(:has([data-qa="threads_flexpane"])) .p-view_contents--sidebar{display:none!important}`
-
 func localDay(ts string) (string, error) {
 	parts := strings.Split(ts, ".")
 	if len(parts) > 2 || len(parts[0]) != 10 {
@@ -76,7 +71,7 @@ func (b *Browser) visible(pane cdp.NodeID, clip *page.Viewport) ([]message, erro
 	if clip != nil {
 		viewport = bounds{clip.X, clip.Y, clip.X + clip.Width, clip.Y + clip.Height}
 	}
-	ids, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, pane)
+	ids, err := b.nodes(slackUIMessagesWithTimestamp, pane)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +105,7 @@ func signature(msg []message) string {
 func (b *Browser) oldest(pane cdp.NodeID) error {
 	previous, stable := "", 0
 	for i := range 20000 {
-		loaded, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, pane)
+		loaded, err := b.nodes(slackUIMessagesWithTimestamp, pane)
 		if err != nil {
 			return err
 		}
@@ -277,7 +272,7 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 					out.Gaps = append(out.Gaps, gap)
 					fmt.Fprintln(os.Stderr, "WARNING: screenshot overlap could not be restored; continuing with possible gap:", gap)
 				} else {
-					anchor, err := b.nodes(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, previous[0].ts), pane)
+					anchor, err := b.nodes(slackMessageAt(previous[0].ts), pane)
 					if err != nil {
 						return frames, err
 					}
@@ -369,7 +364,7 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 			if err != nil {
 				return frames, err
 			}
-			loaded, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, pane)
+			loaded, err := b.nodes(slackUIMessagesWithTimestamp, pane)
 			if err != nil {
 				return frames, err
 			}
@@ -392,10 +387,10 @@ func (b *Browser) capturePane(out *Output, pane cdp.NodeID, directory string, op
 }
 
 func (b *Browser) isolateThread() (cdp.StyleSheetID, error) {
-	if err := b.wait(`[data-qa="threads_flexpane"]`, 20*time.Second); err != nil {
+	if err := b.wait(slackUIThreadPane, 20*time.Second); err != nil {
 		return "", err
 	}
-	threads, err := b.nodes(`[data-qa="threads_flexpane"]`, 0)
+	threads, err := b.nodes(slackUIThreadPane, 0)
 	if err != nil {
 		return "", err
 	}
@@ -411,13 +406,13 @@ func (b *Browser) isolateThread() (cdp.StyleSheetID, error) {
 			return "", errors.New("could not determine the thread background color")
 		}
 	}
-	return b.styleSheet(`[data-qa="threads_flexpane"] {position:fixed!important;inset:0 auto auto 0!important;width:100vw!important;height:100vh!important;z-index:100000!important;background:rgb(` + background + `)!important}.p-tab_rail,.p-workspace_banner__desktop-notifications{display:none!important}`)
+	return b.styleSheet(slackThreadIsolationCSS(background))
 }
 
 func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error {
 	seen := map[string]bool{}
 	return func(pane cdp.NodeID) error {
-		items, err := b.nodes(`[data-qa="virtual-list-item"]:has([data-qa="reply_bar_view_thread"])`, pane)
+		items, err := b.nodes(slackUIThreadReplyItems, pane)
 		if err != nil {
 			return err
 		}
@@ -427,7 +422,7 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 		}
 		var pending []string
 		for _, item := range items {
-			bar, err := b.nodes(`[data-qa="reply_bar_view_thread"]`, item)
+			bar, err := b.nodes(slackUIThreadReplyBar, item)
 			if err != nil {
 				return err
 			}
@@ -438,7 +433,7 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 			if err != nil || !overlaps(r, view) {
 				continue
 			}
-			parents, err := b.nodes(`[data-qa="message_container"][data-msg-ts]`, item)
+			parents, err := b.nodes(slackUIMessagesWithTimestamp, item)
 			if err != nil || len(parents) == 0 {
 				return errors.New("thread parent message not found")
 			}
@@ -454,11 +449,11 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 		for _, ts := range pending {
 			opened := false
 			for range 2 {
-				selector := fmt.Sprintf(`[data-qa="virtual-list-item"]:has([data-qa="message_container"][data-msg-ts="%s"]) [data-qa="reply_bar_view_thread"]`, ts)
+				selector := slackThreadReplyButton(ts)
 				if e := b.click(selector); e != nil {
 					return e
 				}
-				if e := b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); e == nil {
+				if e := b.wait(slackUIThreadMessages, 10*time.Second); e == nil {
 					opened = true
 					break
 				}
@@ -466,7 +461,7 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 			if !opened {
 				return fmt.Errorf("thread %s did not open after retry", ts)
 			}
-			thread, err := b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+			thread, err := b.paneFor(slackUIThreadMessages)
 			if err != nil {
 				return err
 			}
@@ -498,7 +493,7 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 					return reset
 				}
 			}
-			if err = b.click(`[data-qa="threads_flexpane"] [data-qa="close_flexpane"], [data-qa="threads_flexpane"] [data-qa="unstyled-button"][aria-label="Close"]`); err != nil {
+			if err = b.click(slackUIThreadPane + " " + slackUIThreadCloseButtons); err != nil {
 				return err
 			}
 			if err = b.waitThreadClosed(); err != nil {
@@ -512,7 +507,7 @@ func (b *Browser) threadCallback(out *Output, o Options) func(cdp.NodeID) error 
 }
 
 func (b *Browser) captureConversation(o Options, out *Output) (int, error) {
-	pane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+	pane, err := b.paneFor(slackUIConversationMessages)
 	if err != nil {
 		return 0, err
 	}

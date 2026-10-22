@@ -24,17 +24,17 @@ var attachmentCount = regexp.MustCompile(`^Toggle (\d+) attachments$`)
 // in the message body must not be downloaded or allowed to send session cookies.
 func (b *Browser) collectFiles(out *Output, messages []message) error {
 	for _, msg := range messages {
-		groups, err := b.nodes(`[data-qa="message_kit_files"]`, msg.id)
+		groups, err := b.nodes(slackUIAttachmentBlock, msg.id)
 		if err != nil {
 			return err
 		}
 		for _, group := range groups {
-			links, err := b.nodes(`a[href*="files.slack.com/files-pri/"],a[data-qa="message_file_link"]`, group)
+			links, err := b.nodes(slackUIAttachmentLinks, group)
 			if err != nil {
 				return err
 			}
 			name := "(unknown name)"
-			if n, e := b.nodes(`[data-qa="file_name"]`, group); e == nil && len(n) > 0 {
+			if n, e := b.nodes(slackUIFileName, group); e == nil && len(n) > 0 {
 				if text, e := b.text(n[0]); e == nil && strings.TrimSpace(text) != "" {
 					name = strings.TrimSpace(text)
 				}
@@ -45,7 +45,7 @@ func (b *Browser) collectFiles(out *Output, messages []message) error {
 					return err
 				}
 				linkName := name
-				if labels, e := b.nodes(`[data-qa="file_name"]`, link); e == nil && len(labels) > 0 {
+				if labels, e := b.nodes(slackUIFileName, link); e == nil && len(labels) > 0 {
 					if text, e := b.text(labels[0]); e == nil && strings.TrimSpace(text) != "" {
 						linkName = strings.TrimSpace(text)
 					}
@@ -57,7 +57,7 @@ func (b *Browser) collectFiles(out *Output, messages []message) error {
 				}
 			}
 			count := 1
-			if buttons, e := b.nodes(`[data-qa="file-collapse-button"]`, group); e == nil && len(buttons) > 0 {
+			if buttons, e := b.nodes(slackUIFileCollapse, group); e == nil && len(buttons) > 0 {
 				if label, e := b.attr(buttons[0], "aria-label"); e == nil {
 					if match := attachmentCount.FindStringSubmatch(label); len(match) > 1 {
 						count, _ = strconv.Atoi(match[1])

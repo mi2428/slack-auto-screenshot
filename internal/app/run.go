@@ -59,7 +59,7 @@ func Run(o Options) error {
 		if err = b.closeStaleThreads(); err != nil {
 			return err
 		}
-		if err = b.wait(`[data-qa="message_pane"] [data-qa="message_container"]`, 20*time.Second); err != nil {
+		if err = b.wait(slackUIConversationMessages, 20*time.Second); err != nil {
 			return fmt.Errorf("conversation messages did not appear: %w", err)
 		}
 		name, err := b.conversationName()
@@ -120,7 +120,7 @@ func login(b *Browser, domain string) error {
 			return err
 		}
 		if strings.HasPrefix(loc, "https://app.slack.com/client/") {
-			if n, _ := b.nodes(slackAppReady, 0); len(n) > 0 {
+			if n, _ := b.nodes(slackUIReady, 0); len(n) > 0 {
 				stable++
 			} else {
 				stable = 0
@@ -141,8 +141,7 @@ func login(b *Browser, domain string) error {
 }
 
 func (b *Browser) conversationName() (string, error) {
-	sel := `[data-qa="channel_name"] .p-view_header__channel_title, [data-qa="dm_title"]`
-	nodes, err := b.nodes(sel, 0)
+	nodes, err := b.nodes(slackUIChannelTitle, 0)
 	if err != nil {
 		return "", err
 	}
@@ -167,7 +166,7 @@ func (b *Browser) closeStaleThreads() error {
 		return err
 	}
 	for range 5 {
-		panes, e := b.nodes(`[data-qa="threads_flexpane"]`, 0)
+		panes, e := b.nodes(slackUIThreadPane, 0)
 		if e != nil {
 			return e
 		}
@@ -183,7 +182,7 @@ func (b *Browser) closeStaleThreads() error {
 		if visible == 0 {
 			return nil
 		}
-		buttons, e := b.nodes(`[data-qa="close_flexpane"], [data-qa="unstyled-button"][aria-label="Close"]`, visible)
+		buttons, e := b.nodes(slackUIThreadCloseButtons, visible)
 		if e != nil || len(buttons) == 0 {
 			return errors.New("could not close a previously opened thread pane")
 		}
@@ -199,7 +198,7 @@ func (b *Browser) closeStaleThreads() error {
 
 func (b *Browser) waitThreadClosed() error {
 	for range 40 {
-		panes, err := b.nodes(`[data-qa="threads_flexpane"]`, 0)
+		panes, err := b.nodes(slackUIThreadPane, 0)
 		if err != nil {
 			return err
 		}
@@ -219,7 +218,7 @@ func (b *Browser) waitThreadClosed() error {
 }
 
 func (b *Browser) dismissAutocomplete() error {
-	modal, err := b.nodes(`.c-search_modal--autocomplete`, 0)
+	modal, err := b.nodes(slackUIAutocomplete, 0)
 	if err != nil {
 		return err
 	}
@@ -238,7 +237,7 @@ func (b *Browser) dismissAutocomplete() error {
 }
 
 func (b *Browser) dismissAvailabilityReminder() error {
-	dialogs, err := b.nodes(`[role="dialog"]`, 0)
+	dialogs, err := b.nodes(slackUIAvailabilityDialog, 0)
 	if err != nil {
 		return err
 	}
@@ -262,7 +261,7 @@ func (b *Browser) dismissAvailabilityReminder() error {
 	if !strings.Contains(text, "Set yourself to active?") {
 		return errors.New("unexpected Slack dialog is open")
 	}
-	buttons, err := b.nodes(`button, [role="button"]`, dialog)
+	buttons, err := b.nodes(slackUIAvailabilityButtons, dialog)
 	if err != nil {
 		return err
 	}
@@ -296,7 +295,7 @@ func (b *Browser) dismissAvailabilityReminder() error {
 	}
 	for range 20 {
 		visible := false
-		dialogs, err = b.nodes(`[role="dialog"]`, 0)
+		dialogs, err = b.nodes(slackUIAvailabilityDialog, 0)
 		if err != nil {
 			return err
 		}
@@ -331,9 +330,9 @@ func (b *Browser) resolveChannel(workspace, name, domain string) (string, error)
 	if err := b.dismissAvailabilityReminder(); err != nil {
 		return "", err
 	}
-	input := `[data-qa="focusable_search_input"] [data-qa="texty_input"]`
+	input := slackUIChannelSearchInput
 	if n, _ := b.nodes(input, 0); len(n) == 0 {
-		if err := b.click(`[data-qa="top_nav_search"]`); err != nil {
+		if err := b.click(slackUITopNavSearch); err != nil {
 			return "", err
 		}
 	}
@@ -341,13 +340,13 @@ func (b *Browser) resolveChannel(workspace, name, domain string) (string, error)
 		return "", err
 	}
 	for range 75 {
-		matches, e := b.nodes(`[role="option"]:has([data-qa="small_channel_entity"])`, 0)
+		matches, e := b.nodes(slackUIChannelOptions, 0)
 		if e != nil {
 			return "", e
 		}
 		var ids []string
 		for _, m := range matches {
-			children, e := b.nodes(`[data-qa="small_channel_entity"]`, m)
+			children, e := b.nodes(slackUISmallChannelEntity, m)
 			if e != nil || len(children) != 1 {
 				continue
 			}

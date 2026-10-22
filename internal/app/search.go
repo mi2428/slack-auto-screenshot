@@ -920,9 +920,9 @@ func (b *Browser) captureSearchHit(workspace string, h hit, index, total int, o 
 }
 
 func (b *Browser) targetPane(ts string) (cdp.NodeID, cdp.NodeID, bool, error) {
-	sel := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, ts)
+	sel := slackMessageAt(ts)
 	for range 50 {
-		for _, root := range []string{`[data-qa="threads_flexpane"]`, `[data-qa="message_pane"]`} {
+		for _, root := range []string{slackUIThreadPane, slackUIMessagePane} {
 			roots, e := b.nodes(root, 0)
 			if e != nil {
 				return 0, 0, false, e
@@ -944,7 +944,7 @@ func (b *Browser) targetPane(ts string) (cdp.NodeID, cdp.NodeID, bool, error) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if pane, err := b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`); err == nil {
+	if pane, err := b.paneFor(slackUIThreadMessages); err == nil {
 		fmt.Println("Search hit not initially loaded; scanning thread pane")
 		if err = b.positionPaneMessage(pane, ts); err == nil {
 			targets, e := b.nodes(sel, pane)
@@ -953,7 +953,7 @@ func (b *Browser) targetPane(ts string) (cdp.NodeID, cdp.NodeID, bool, error) {
 			}
 		}
 	}
-	if pane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`); err == nil {
+	if pane, err := b.paneFor(slackUIConversationMessages); err == nil {
 		fmt.Println("Search hit not initially loaded; scanning main pane")
 		if err = b.positionPaneMessage(pane, ts); err == nil {
 			targets, e := b.nodes(sel, pane)
@@ -970,11 +970,11 @@ func (b *Browser) positionMainParent(parent string) (cdp.NodeID, error) {
 }
 
 func (b *Browser) positionMainParentWithin(parent string, limit int) (cdp.NodeID, error) {
-	pane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+	pane, err := b.paneFor(slackUIConversationMessages)
 	if err != nil {
 		return 0, err
 	}
-	selector := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, parent)
+	selector := slackMessageAt(parent)
 	if parents, err := b.nodes(selector, pane); err != nil {
 		return 0, err
 	} else if len(parents) > 0 {
@@ -1048,11 +1048,11 @@ func (b *Browser) prepareChannelHit(ts string) error {
 }
 
 func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.NodeID, error) {
-	mainPane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+	mainPane, err := b.paneFor(slackUIConversationMessages)
 	if err != nil {
 		return 0, err
 	}
-	selector := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, parent)
+	selector := slackMessageAt(parent)
 	if parents, err := b.nodes(selector, mainPane); err != nil {
 		return 0, err
 	} else if len(parents) > 0 {
@@ -1094,7 +1094,7 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 		return 0, err
 	}
 	for range 100 {
-		mainPane, err = b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+		mainPane, err = b.paneFor(slackUIConversationMessages)
 		if err == nil {
 			parents, e := b.nodes(selector, mainPane)
 			if e != nil {
@@ -1113,15 +1113,15 @@ func (b *Browser) openThreadParent(threadPane cdp.NodeID, parent string) (cdp.No
 }
 
 func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
-	pane, err := b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+	pane, err := b.paneFor(slackUIThreadMessages)
 	if err == nil {
 		return pane, nil
 	}
-	mainPane, err := b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+	mainPane, err := b.paneFor(slackUIConversationMessages)
 	if err != nil {
 		return 0, fmt.Errorf("find main message pane to reopen thread: %w", err)
 	}
-	selector := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, parent)
+	selector := slackMessageAt(parent)
 	parents, err := b.nodes(selector, mainPane)
 	if err != nil {
 		return 0, err
@@ -1137,7 +1137,7 @@ func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
 			if rectErr == nil {
 				time.Sleep(500 * time.Millisecond)
 			}
-			bars, barsErr := b.nodes(`[data-qa="reply_bar_view_thread"]`, mainPane)
+			bars, barsErr := b.nodes(slackUIThreadReplyBar, mainPane)
 			if barsErr == nil {
 				best, distance := cdp.NodeID(0), math.Inf(1)
 				for _, bar := range bars {
@@ -1151,8 +1151,8 @@ func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
 					}
 				}
 				if best != 0 && b.clickID(best) == nil {
-					if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err == nil {
-						return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+					if err = b.wait(slackUIThreadMessages, 10*time.Second); err == nil {
+						return b.paneFor(slackUIThreadMessages)
 					}
 				}
 			}
@@ -1161,21 +1161,21 @@ func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
 		if resolveErr == nil && resolved.Object != nil && resolved.Object.ObjectID != "" {
 			userGesture := true
 			result, clickErr := chromedp.Call(b.ctx, runtime.CallFunctionOn, runtime.CallFunctionOnParams{
-				FunctionDeclaration: `function(){let root=this,bar=null;while(root&&root.getAttribute('data-qa')!=='message_pane'){bar=root.querySelector('[data-qa="reply_bar_view_thread"],button[aria-label*="thread" i],button[aria-label*="reply" i],[role="button"][aria-label*="thread" i],[role="button"][aria-label*="reply" i]');if(bar)break;root=root.parentElement}if(!bar)throw new Error("reply bar not found");bar.click()}`,
+				FunctionDeclaration: slackReopenThreadClick,
 				ObjectID:            resolved.Object.ObjectID,
 				UserGesture:         &userGesture,
 			})
 			_, _ = chromedp.Call(b.ctx, runtime.ReleaseObject, runtime.ReleaseObjectParams{ObjectID: resolved.Object.ObjectID})
 			if clickErr == nil && result.Result != nil && result.ExceptionDetails == nil {
-				if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err == nil {
-					return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+				if err = b.wait(slackUIThreadMessages, 10*time.Second); err == nil {
+					return b.paneFor(slackUIThreadMessages)
 				}
 			}
 		}
 	}
 	selectors := []string{
-		fmt.Sprintf(`[data-qa="virtual-list-item"]:has(%s) [data-qa="reply_bar_view_thread"]`, selector),
-		fmt.Sprintf(`%s [data-qa="reply_bar_view_thread"]`, selector),
+		slackThreadReplyButton(parent),
+		selector + " " + slackUIThreadReplyBar,
 	}
 	var clickErr error
 	for _, selector := range selectors {
@@ -1186,10 +1186,10 @@ func (b *Browser) reopenThreadPane(parent string) (cdp.NodeID, error) {
 	if clickErr != nil {
 		return 0, fmt.Errorf("reopen thread pane: %w", clickErr)
 	}
-	if err = b.wait(`[data-qa="threads_flexpane"] [data-qa="message_container"]`, 10*time.Second); err != nil {
+	if err = b.wait(slackUIThreadMessages, 10*time.Second); err != nil {
 		return 0, fmt.Errorf("wait for reopened thread pane: %w", err)
 	}
-	return b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+	return b.paneFor(slackUIThreadMessages)
 }
 
 func (b *Browser) positionPaneMessage(pane cdp.NodeID, target string) error {
@@ -1197,7 +1197,7 @@ func (b *Browser) positionPaneMessage(pane cdp.NodeID, target string) error {
 }
 
 func (b *Browser) positionPaneMessageWithin(pane cdp.NodeID, target string, limit int) error {
-	selector := fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, target)
+	selector := slackMessageAt(target)
 	last, stalled := "", 0
 	for i := range limit {
 		messages, err := b.nodes(selector, pane)
@@ -1262,18 +1262,18 @@ func (b *Browser) captureContextRun(ts, parent, directory string, o Options, out
 		var err error
 		if reusePane {
 			if parent == ts {
-				pane, err = b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+				pane, err = b.paneFor(slackUIConversationMessages)
 				if err != nil {
 					return err
 				}
 				return b.positionPaneMessageWithin(pane, ts, 10)
 			}
 			thread = true
-			mainPane, err = b.paneFor(`[data-qa="message_pane"] [data-qa="message_container"]`)
+			mainPane, err = b.paneFor(slackUIConversationMessages)
 			if err != nil {
 				return err
 			}
-			pane, err = b.paneFor(`[data-qa="threads_flexpane"] [data-qa="message_container"]`)
+			pane, err = b.paneFor(slackUIThreadMessages)
 			if err != nil {
 				return err
 			}

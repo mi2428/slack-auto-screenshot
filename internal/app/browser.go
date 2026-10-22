@@ -31,8 +31,6 @@ type Browser struct {
 	theme                      string
 }
 
-const slackAppReady = `[data-qa="top_nav_search"], [data-qa="message_pane"]`
-
 func OpenBrowser(o Options, visible bool) (*Browser, error) {
 	profile, err := filepath.Abs(".slack-browser")
 	if err != nil {
@@ -269,7 +267,7 @@ func (b *Browser) findPane(message cdp.NodeID) (cdp.NodeID, error) {
 	if err != nil {
 		return 0, fmt.Errorf("message timestamp: %w", err)
 	}
-	all, err := b.nodes(fmt.Sprintf(`[data-qa="slack_kit_scrollbar"]:has([data-qa="message_container"][data-msg-ts="%s"])`, ts), 0)
+	all, err := b.nodes(slackScrollpaneFor(ts), 0)
 	if err != nil {
 		return 0, err
 	}
@@ -284,7 +282,7 @@ func (b *Browser) findPane(message cdp.NodeID) (cdp.NodeID, error) {
 		if e != nil {
 			continue
 		}
-		contained, e := b.nodes(fmt.Sprintf(`[data-qa="message_container"][data-msg-ts="%s"]`, ts), id)
+		contained, e := b.nodes(slackMessageAt(ts), id)
 		if e != nil {
 			continue
 		}
@@ -364,10 +362,9 @@ func (b *Browser) screenshot(clip *page.Viewport) ([]byte, error) {
 func (b *Browser) waitFileImages() error {
 	ctx, cancel := context.WithTimeout(b.ctx, 12*time.Second)
 	defer cancel()
-	const pendingImages = `Array.from(document.querySelectorAll('[data-qa="message_kit_files"] img')).filter(i => {const r=i.getBoundingClientRect();return r.width>0&&r.height>0&&r.top<innerHeight&&r.bottom>0&&r.left<innerWidth&&r.right>0&&!i.complete}).length`
 	waited := false
 	for {
-		pending, err := chromedp.Run(ctx, chromedp.Evaluate[int](pendingImages))
+		pending, err := chromedp.Run(ctx, chromedp.Evaluate[int](slackPendingFileImages))
 		if err != nil {
 			return fmt.Errorf("check visible attachment images: %w", err)
 		}
@@ -431,7 +428,7 @@ func (b *Browser) authWithin(workspace, domain string, timeout time.Duration) er
 			if !strings.HasPrefix(loc, workspace+"/") && loc != workspace {
 				break
 			}
-			if nodes, _ := b.nodes(slackAppReady, 0); len(nodes) > 0 {
+			if nodes, _ := b.nodes(slackUIReady, 0); len(nodes) > 0 {
 				return nil
 			}
 			select {
